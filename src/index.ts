@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { FAVICON_BASE64 } from "./favicon-data";
 
 type AwsCredentials = {
   accessKeyId: string;
@@ -159,6 +160,7 @@ export default {
   async fetch(request: Request, env: AppEnv): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/") return new Response(renderHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
+    if (request.method === "GET" && url.pathname === "/favicon.ico") return faviconResponse();
     if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
     if (request.method === "POST" && url.pathname === "/api/aws/buckets") return json({ buckets: await listAwsBuckets(await parseAwsCredentials(request)) });
     if (request.method === "POST" && url.pathname === "/api/aws/list") return handleAwsList(request);
@@ -173,10 +175,11 @@ export default {
 function renderHtml(): string {
   return String.raw`<!doctype html>
 <html lang="en">
-<head>
+  <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>S3 to Bunny Migration</title>
+  <link rel="icon" href="/favicon.ico" />
   <style>
     :root{
       color-scheme: light;
@@ -297,13 +300,9 @@ function renderHtml(): string {
         <div class="panel-body">
           <div class="field"><label for="bunnyApiKey">Bunny account API key</label><input id="bunnyApiKey" type="password" autocomplete="off" spellcheck="false" /></div>
           <div class="row">
-            <div class="field">
+            <div class="field wide-field">
               <label for="bunnyZoneSelect">Storage zone</label>
               <select id="bunnyZoneSelect"><option value="">Load zones first</option></select>
-            </div>
-            <div class="field">
-              <label for="bunnyZoneName">Or type zone name</label>
-              <input id="bunnyZoneName" autocomplete="off" spellcheck="false" placeholder="storage-zone-name" />
             </div>
             <button class="secondary" id="loadBunnyZones">Refresh zones</button>
           </div>
@@ -379,7 +378,6 @@ function renderHtml(): string {
         loadAwsPath: $("loadAwsPath"),
         bunnyApiKey: $("bunnyApiKey"),
         bunnyZoneSelect: $("bunnyZoneSelect"),
-        bunnyZoneName: $("bunnyZoneName"),
         bunnyPrefix: $("bunnyPrefix"),
         bunnyList: $("bunnyList"),
         bunnyStatus: $("bunnyStatus"),
@@ -462,7 +460,7 @@ function renderHtml(): string {
       }
 
       function selectedZone() {
-        return els.bunnyZoneName.value.trim() || els.bunnyZoneSelect.value.trim();
+        return els.bunnyZoneSelect.value.trim();
       }
 
       function log(message, kind = "info") {
@@ -504,7 +502,6 @@ function renderHtml(): string {
             awsBucketSelect: els.awsBucketSelect.value,
             awsPrefix: els.awsPrefix.value,
             bunnyApiKey: els.bunnyApiKey.value,
-            bunnyZoneName: els.bunnyZoneName.value,
             bunnyZoneSelect: els.bunnyZoneSelect.value,
             bunnyPrefix: els.bunnyPrefix.value,
             destinationPrefix: els.destinationPrefix.value,
@@ -524,7 +521,6 @@ function renderHtml(): string {
         els.awsBucketSelect.value = saved.awsBucketSelect || "";
         els.awsPrefix.value = saved.awsPrefix || "";
         els.bunnyApiKey.value = saved.bunnyApiKey || "";
-        els.bunnyZoneName.value = saved.bunnyZoneName || "";
         els.bunnyZoneSelect.value = saved.bunnyZoneSelect || "";
         els.bunnyPrefix.value = saved.bunnyPrefix || "";
         els.destinationPrefix.value = saved.destinationPrefix || "";
@@ -733,9 +729,8 @@ function renderHtml(): string {
           const payload = await postJson("/api/bunny/zones", { apiKey: els.bunnyApiKey.value.trim() });
           state.bunnyZones = payload.zones || [];
           els.bunnyZoneSelect.innerHTML = ['<option value="">Choose a zone</option>'].concat(state.bunnyZones.map((zone) => '<option value="' + escapeHtml(zone.name) + '">' + escapeHtml(zone.name) + " (" + escapeHtml(zone.region) + ')</option>')).join("");
-          if (state.bunnyZones[0] && !els.bunnyZoneName.value.trim()) {
+          if (state.bunnyZones[0] && !els.bunnyZoneSelect.value.trim()) {
             els.bunnyZoneSelect.value = state.bunnyZones[0].name;
-            els.bunnyZoneName.value = state.bunnyZones[0].name;
           }
           setStatus(els.bunnyStatus, String(state.bunnyZones.length) + " zone(s) loaded.");
           log("Loaded " + String(state.bunnyZones.length) + " Bunny storage zone(s).");
@@ -748,7 +743,7 @@ function renderHtml(): string {
       async function loadBunnyPath() {
         const zoneName = selectedZone();
         if (!zoneName) {
-          log("Choose or type a Bunny storage zone first.", "error");
+          log("Choose a Bunny storage zone first.", "error");
           return;
         }
         const zone = state.bunnyZones.find((item) => item.name === zoneName);
@@ -786,10 +781,6 @@ function renderHtml(): string {
 
       function syncBucketRegionSelection() {
         syncBucketRegion();
-      }
-
-      function syncZoneInput() {
-        if (els.bunnyZoneSelect.value) els.bunnyZoneName.value = els.bunnyZoneSelect.value;
       }
 
       async function startTransfer() {
@@ -846,7 +837,6 @@ function renderHtml(): string {
         els.awsBucketSelect,
         els.awsPrefix,
         els.bunnyApiKey,
-        els.bunnyZoneName,
         els.bunnyZoneSelect,
         els.bunnyPrefix,
         els.destinationPrefix,
@@ -869,7 +859,6 @@ function renderHtml(): string {
         writeUiState();
       });
       els.awsBucketSelect.addEventListener("change", syncBucketRegionSelection);
-      els.bunnyZoneSelect.addEventListener("change", syncZoneInput);
       els.awsUp.addEventListener("click", () => {
         els.awsPrefix.value = parentPrefix(els.awsPrefix.value);
         loadAwsPath(false);
@@ -979,6 +968,24 @@ async function handleJobs(request: Request, env: AppEnv): Promise<Response> {
 
 function getTransferManagerStub(env: AppEnv): DurableObjectStub<TransferManager> {
   return env.TRANSFER_MANAGER.getByName("transfer-manager");
+}
+
+function faviconResponse(): Response {
+  return new Response(base64ToBytes(FAVICON_BASE64), {
+    headers: {
+      "content-type": "image/x-icon",
+      "cache-control": "public, max-age=86400",
+    },
+  });
+}
+
+function base64ToBytes(base64: string): ArrayBuffer {
+  const binary = atob(base64.replace(/\s+/g, ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
 async function parseAwsCredentials(request: Request): Promise<AwsCredentials> {
