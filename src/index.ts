@@ -281,12 +281,6 @@ function renderHtml(): string {
             </div>
             <button class="secondary" id="loadAwsBuckets">Refresh buckets</button>
           </div>
-          <div class="row">
-            <div class="field wide-field">
-              <label for="awsRegion">AWS region</label>
-              <select id="awsRegion"><option value="">Load buckets first</option></select>
-            </div>
-          </div>
           <div class="pathbar">
             <button class="ghost mini" id="awsUp" title="Parent folder">..</button>
             <div class="field" style="margin:0"><label for="awsPrefix">Path</label><input id="awsPrefix" autocomplete="off" spellcheck="false" placeholder="optional/prefix/" value="" /></div>
@@ -382,7 +376,6 @@ function renderHtml(): string {
       const els = {
         awsAccessKeyId: $("awsAccessKeyId"),
         awsSecretAccessKey: $("awsSecretAccessKey"),
-        awsRegion: $("awsRegion"),
         awsBucketSelect: $("awsBucketSelect"),
         awsPrefix: $("awsPrefix"),
         awsList: $("awsList"),
@@ -470,7 +463,7 @@ function renderHtml(): string {
       }
 
       function selectedAwsRegion() {
-        return els.awsRegion.value.trim() || state.awsBucketRegions.get(selectedBucket()) || "us-east-1";
+        return state.awsBucketRegions.get(selectedBucket()) || "us-east-1";
       }
 
       function selectedZone() {
@@ -512,7 +505,6 @@ function renderHtml(): string {
             expiresAt: Date.now() + STORAGE_TTL_MS,
             awsAccessKeyId: els.awsAccessKeyId.value,
             awsSecretAccessKey: els.awsSecretAccessKey.value,
-            awsRegion: els.awsRegion.value,
             awsBucketSelect: els.awsBucketSelect.value,
             awsPrefix: els.awsPrefix.value,
             bunnyApiKey: els.bunnyApiKey.value,
@@ -531,7 +523,6 @@ function renderHtml(): string {
         const saved = readUiState();
         els.awsAccessKeyId.value = saved.awsAccessKeyId || "";
         els.awsSecretAccessKey.value = saved.awsSecretAccessKey || "";
-        els.awsRegion.value = saved.awsRegion || "";
         els.awsBucketSelect.value = saved.awsBucketSelect || "";
         els.awsPrefix.value = saved.awsPrefix || "";
         els.bunnyApiKey.value = saved.bunnyApiKey || "";
@@ -619,32 +610,6 @@ function renderHtml(): string {
         });
       }
 
-      function renderAwsRegions() {
-        const counts = new Map();
-        for (const bucket of state.awsBuckets) {
-          const region = bucket.region || "us-east-1";
-          counts.set(region, (counts.get(region) || 0) + 1);
-        }
-        const regions = Array.from(counts.keys());
-        els.awsRegion.innerHTML = regions.length
-          ? ['<option value="">Choose a region</option>'].concat(
-              regions.map((region) => {
-                const count = counts.get(region) || 0;
-                const label = count > 1 ? region + " (" + String(count) + " buckets)" : region + " (1 bucket)";
-                return '<option value="' + escapeHtml(region) + '">' + escapeHtml(label) + '</option>';
-              }),
-            ).join("")
-          : '<option value="">Load buckets first</option>';
-      }
-
-      function syncBucketRegion() {
-        const region = state.awsBucketRegions.get(selectedBucket());
-        if (region) {
-          els.awsRegion.value = region;
-        }
-        writeUiState();
-      }
-
       function renderJobs() {
         const header = '<div class="list-head"><div>Job</div><div>Status</div><div>Progress</div><div>Details</div></div>';
         if (!state.jobs.length) {
@@ -694,11 +659,9 @@ function renderHtml(): string {
           els.awsBucketSelect.innerHTML = ['<option value="">Choose a bucket</option>'].concat(
             state.awsBuckets.map((bucket) => '<option value="' + escapeHtml(bucket.name) + '">' + escapeHtml(bucket.name) + '</option>'),
           ).join("");
-          renderAwsRegions();
           if (state.awsBuckets[0] && !els.awsBucketSelect.value) {
             els.awsBucketSelect.value = state.awsBuckets[0].name;
           }
-          syncBucketRegion();
           setStatus(els.awsStatus, String(state.awsBuckets.length) + " bucket(s) loaded.");
           log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
         } catch (error) {
@@ -799,10 +762,6 @@ function renderHtml(): string {
         }
       }
 
-      function syncBucketRegionSelection() {
-        syncBucketRegion();
-      }
-
       async function startTransfer() {
         const selections = Array.from(state.awsSelections.keys()).map((key) => {
           const item = state.awsItems.find((entry) => entry.key === key);
@@ -853,7 +812,6 @@ function renderHtml(): string {
       [
         els.awsAccessKeyId,
         els.awsSecretAccessKey,
-        els.awsRegion,
         els.awsBucketSelect,
         els.awsPrefix,
         els.bunnyApiKey,
@@ -878,7 +836,6 @@ function renderHtml(): string {
         log("Selection cleared.");
         writeUiState();
       });
-      els.awsBucketSelect.addEventListener("change", syncBucketRegionSelection);
       els.awsUp.addEventListener("click", () => {
         els.awsPrefix.value = parentPrefix(els.awsPrefix.value);
         loadAwsPath(false);
