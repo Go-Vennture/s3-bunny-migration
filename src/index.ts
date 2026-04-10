@@ -1313,18 +1313,36 @@ async function listBunnyZones(apiKey: string): Promise<BunnyZone[]> {
     bodyPreview: rawText.slice(0, 500),
   });
   if (!response.ok) throw new Error(rawText);
-  const payload = JSON.parse(rawText) as { Items?: BunnyZone[]; items?: BunnyZone[] };
-  const zones = (payload.Items || payload.items || [])
-    .filter((zone) => !zone.deleted)
-    .map((zone) => ({
-      id: zone.id,
-      name: zone.name,
-      region: zone.region,
-      password: zone.password,
-      deleted: zone.deleted,
-    }));
+  const payload = JSON.parse(rawText) as unknown;
+  const zones = normalizeBunnyZonePayload(payload);
   console.log("[bunny] parsed storage zones", { count: zones.length });
   return zones;
+}
+
+function normalizeBunnyZonePayload(payload: unknown): BunnyZone[] {
+  const items = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object"
+      ? ((payload as Record<string, unknown>).Items ?? (payload as Record<string, unknown>).items)
+      : [];
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      const zone = item as Record<string, unknown>;
+      const id = Number(zone.id ?? zone.Id ?? 0);
+      const name = String(zone.name ?? zone.Name ?? "");
+      const region = String(zone.region ?? zone.Region ?? "");
+      const passwordValue = zone.password ?? zone.Password;
+      const deletedValue = zone.deleted ?? zone.Deleted;
+      return {
+        id,
+        name,
+        region,
+        password: typeof passwordValue === "string" ? passwordValue : undefined,
+        deleted: Boolean(deletedValue),
+      };
+    })
+    .filter((zone) => !zone.deleted && zone.id && zone.name && zone.region);
 }
 
 async function resolveBunnyZone(apiKey: string, zoneName: string): Promise<ResolvedBunnyZone> {
