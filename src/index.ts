@@ -711,7 +711,7 @@ function renderHtml(): string {
             log("Bunny returned 0 storage zones. Double-check that you used the Bunny account API key from the dashboard, not a storage zone password, and that the account actually has storage zones.", "error");
             return;
           }
-          els.bunnyZoneSelect.innerHTML = ['<option value="">Choose a zone</option>'].concat(state.bunnyZones.map((zone) => '<option value="' + escapeHtml(zone.name) + '">' + escapeHtml(zone.name) + " (" + escapeHtml(zone.region) + ')</option>')).join("");
+          els.bunnyZoneSelect.innerHTML = ['<option value="">Choose a zone</option>'].concat(state.bunnyZones.map((zone) => '<option value="' + escapeHtml(zone.name) + '">' + escapeHtml(zone.name) + '</option>')).join("");
           if (state.bunnyZones[0] && !els.bunnyZoneSelect.value.trim()) {
             els.bunnyZoneSelect.value = state.bunnyZones[0].name;
           }
