@@ -222,6 +222,7 @@ function renderHtml(): string {
     .name-cell button.link{background:none;border:0;padding:0;min-height:0;text-align:left;color:var(--text);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .meta{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .inline-note{font-size:12px;color:var(--muted);line-height:1.45}
+    .inline-note.error{color:#b42318;font-weight:600}
     .check{width:16px;height:16px}
     .footer{margin-top:18px;display:grid;gap:12px}
     .transfer-card{background:rgba(255,255,255,.84);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;display:grid;gap:14px}
@@ -260,7 +261,7 @@ function renderHtml(): string {
             <div class="field"><label for="awsAccessKeyId">AWS access key ID</label><input id="awsAccessKeyId" autocomplete="off" spellcheck="false" /></div>
             <div class="field"><label for="awsSecretAccessKey">AWS secret access key</label><input id="awsSecretAccessKey" type="password" autocomplete="off" spellcheck="false" /></div>
             <div class="field"><label for="awsSessionToken">AWS session token</label><input id="awsSessionToken" autocomplete="off" spellcheck="false" placeholder="Optional" /></div>
-            <div class="field"><label for="awsRegion">AWS region</label><input id="awsRegion" autocomplete="off" spellcheck="false" value="us-east-1" /></div>
+            <div class="field"><label for="awsRegion">AWS region (optional)</label><input id="awsRegion" autocomplete="off" spellcheck="false" value="us-east-1" /></div>
           </div>
           <div class="row">
             <div class="field">
@@ -374,6 +375,8 @@ function renderHtml(): string {
         pathMode: $("pathMode"),
       };
 
+      const STORAGE_KEY = "s3-bunny-migration:ui-state:v1";
+
       const state = {
         awsItems: [],
         bunnyItems: [],
@@ -440,9 +443,66 @@ function renderHtml(): string {
         els.log.scrollTop = els.log.scrollHeight;
       }
 
+      function readUiState() {
+        try {
+          const raw = window.sessionStorage.getItem(STORAGE_KEY);
+          return raw ? JSON.parse(raw) : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function writeUiState() {
+        try {
+          window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+            awsAccessKeyId: els.awsAccessKeyId.value,
+            awsSecretAccessKey: els.awsSecretAccessKey.value,
+            awsSessionToken: els.awsSessionToken.value,
+            awsRegion: els.awsRegion.value,
+            awsBucketName: els.awsBucketName.value,
+            awsBucketSelect: els.awsBucketSelect.value,
+            awsPrefix: els.awsPrefix.value,
+            bunnyApiKey: els.bunnyApiKey.value,
+            bunnyZoneName: els.bunnyZoneName.value,
+            bunnyZoneSelect: els.bunnyZoneSelect.value,
+            bunnyPrefix: els.bunnyPrefix.value,
+            destinationPrefix: els.destinationPrefix.value,
+            pathMode: els.pathMode.value,
+            awsSelections: Array.from(state.awsSelections.keys()),
+          }));
+        } catch {
+          // Session storage can be unavailable in some browser privacy modes.
+        }
+      }
+
+      function restoreUiState() {
+        const saved = readUiState();
+        els.awsAccessKeyId.value = saved.awsAccessKeyId || "";
+        els.awsSecretAccessKey.value = saved.awsSecretAccessKey || "";
+        els.awsSessionToken.value = saved.awsSessionToken || "";
+        els.awsRegion.value = saved.awsRegion || "us-east-1";
+        els.awsBucketName.value = saved.awsBucketName || "";
+        els.awsBucketSelect.value = saved.awsBucketSelect || "";
+        els.awsPrefix.value = saved.awsPrefix || "";
+        els.bunnyApiKey.value = saved.bunnyApiKey || "";
+        els.bunnyZoneName.value = saved.bunnyZoneName || "";
+        els.bunnyZoneSelect.value = saved.bunnyZoneSelect || "";
+        els.bunnyPrefix.value = saved.bunnyPrefix || "";
+        els.destinationPrefix.value = saved.destinationPrefix || "";
+        if (saved.pathMode) els.pathMode.value = saved.pathMode;
+        const selections = Array.isArray(saved.awsSelections) ? saved.awsSelections : [];
+        state.awsSelections = new Map(selections.map((key) => [String(key), true]));
+      }
+
+      function setStatus(target, message, kind = "info") {
+        target.textContent = message;
+        target.classList.toggle("error", kind === "error");
+      }
+
       function syncSummary() {
         els.selectionCount.textContent = String(state.awsSelections.size) + " selected";
         els.destinationSummary.textContent = els.destinationPrefix.value.trim() ? "Destination: " + els.destinationPrefix.value.trim() : "Destination root";
+        writeUiState();
       }
 
       function renderAwsList() {
@@ -564,8 +624,8 @@ function renderHtml(): string {
           }
           setStatus(els.awsStatus, String(state.awsBuckets.length) + " bucket(s) loaded.");
           log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
-        } catch (error) {
-          setStatus(els.awsStatus, "Could not load buckets.");
+          } catch (error) {
+          setStatus(els.awsStatus, "Could not load buckets.", "error");
           log(error.message, "error");
         }
       }
@@ -596,7 +656,7 @@ function renderHtml(): string {
           renderAwsList();
           setStatus(els.awsStatus, String(state.awsItems.length) + " item(s) visible." + (state.awsContinuationToken ? " More available." : ""));
         } catch (error) {
-          setStatus(els.awsStatus, "Could not load bucket contents.");
+          setStatus(els.awsStatus, "Could not load bucket contents.", "error");
           log(error.message, "error");
         }
       }
@@ -614,7 +674,7 @@ function renderHtml(): string {
           setStatus(els.bunnyStatus, String(state.bunnyZones.length) + " zone(s) loaded.");
           log("Loaded " + String(state.bunnyZones.length) + " Bunny storage zone(s).");
         } catch (error) {
-          setStatus(els.bunnyStatus, "Could not load zones.");
+          setStatus(els.bunnyStatus, "Could not load zones.", "error");
           log(error.message, "error");
         }
       }
@@ -638,13 +698,9 @@ function renderHtml(): string {
           renderBunnyList();
           setStatus(els.bunnyStatus, String(state.bunnyItems.length) + " item(s) visible.");
         } catch (error) {
-          setStatus(els.bunnyStatus, "Could not load zone contents.");
+          setStatus(els.bunnyStatus, "Could not load zone contents.", "error");
           log(error.message, "error");
         }
-      }
-
-      function setStatus(target, message) {
-        target.textContent = message;
       }
 
       async function refreshJobs() {
@@ -657,7 +713,7 @@ function renderHtml(): string {
           state.jobs = payload.jobs || [];
           renderJobs();
         } catch (error) {
-          els.jobsStatus.textContent = "Could not refresh jobs.";
+          setStatus(els.jobsStatus, "Could not refresh jobs.", "error");
           log(error.message, "error");
         }
       }
@@ -709,12 +765,33 @@ function renderHtml(): string {
           await refreshJobs();
         } catch (error) {
           log(error.message, "error");
-          setStatus(els.awsStatus, "Queue failed.");
-          setStatus(els.bunnyStatus, "Queue failed.");
+          setStatus(els.awsStatus, "Queue failed.", "error");
+          setStatus(els.bunnyStatus, "Queue failed.", "error");
         } finally {
           els.transferButton.disabled = false;
         }
       }
+
+      restoreUiState();
+
+      [
+        els.awsAccessKeyId,
+        els.awsSecretAccessKey,
+        els.awsSessionToken,
+        els.awsRegion,
+        els.awsBucketName,
+        els.awsBucketSelect,
+        els.awsPrefix,
+        els.bunnyApiKey,
+        els.bunnyZoneName,
+        els.bunnyZoneSelect,
+        els.bunnyPrefix,
+        els.destinationPrefix,
+        els.pathMode,
+      ].forEach((element) => {
+        element.addEventListener("input", writeUiState);
+        element.addEventListener("change", writeUiState);
+      });
 
       els.loadAwsBuckets.addEventListener("click", loadAwsBuckets);
       els.loadAwsPath.addEventListener("click", () => loadAwsPath(false));
@@ -726,6 +803,7 @@ function renderHtml(): string {
         renderAwsList();
         syncSummary();
         log("Selection cleared.");
+        writeUiState();
       });
       els.awsBucketSelect.addEventListener("change", syncBucketInput);
       els.bunnyZoneSelect.addEventListener("change", syncZoneInput);
@@ -751,6 +829,7 @@ function renderHtml(): string {
       renderBunnyList();
       renderJobs();
       syncSummary();
+      writeUiState();
       void refreshJobs();
       setInterval(() => {
         void refreshJobs();
@@ -859,7 +938,7 @@ function parseTransferRequest(body: unknown): TransferRequest {
       accessKeyId: requireString(aws.accessKeyId, "aws.accessKeyId"),
       secretAccessKey: requireString(aws.secretAccessKey, "aws.secretAccessKey"),
       sessionToken: typeof aws.sessionToken === "string" && aws.sessionToken.trim() ? aws.sessionToken.trim() : undefined,
-      region: requireString(aws.region, "aws.region"),
+      region: typeof aws.region === "string" && aws.region.trim() ? aws.region.trim() : "us-east-1",
     },
     sourceBucket: requireString(obj.sourceBucket, "sourceBucket"),
     selections,
@@ -876,7 +955,7 @@ function requireAwsCredentials(body: unknown): AwsCredentials {
     accessKeyId: requireString(obj.accessKeyId, "accessKeyId"),
     secretAccessKey: requireString(obj.secretAccessKey, "secretAccessKey"),
     sessionToken: typeof obj.sessionToken === "string" && obj.sessionToken.trim() ? obj.sessionToken.trim() : undefined,
-    region: requireString(obj.region, "region"),
+    region: typeof obj.region === "string" && obj.region.trim() ? obj.region.trim() : "us-east-1",
   };
 }
 
