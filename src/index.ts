@@ -742,6 +742,12 @@ function renderHtml(): string {
         try {
           const payload = await postJson("/api/bunny/zones", { apiKey: els.bunnyApiKey.value.trim() });
           state.bunnyZones = payload.zones || [];
+          if (!state.bunnyZones.length) {
+            els.bunnyZoneSelect.innerHTML = '<option value="">No storage zones returned</option>';
+            setStatus(els.bunnyStatus, "No storage zones were returned for that Bunny API key.", "error");
+            log("Bunny returned 0 storage zones. Double-check that you used the Bunny account API key from the dashboard, not a storage zone password, and that the account actually has storage zones.", "error");
+            return;
+          }
           els.bunnyZoneSelect.innerHTML = ['<option value="">Choose a zone</option>'].concat(state.bunnyZones.map((zone) => '<option value="' + escapeHtml(zone.name) + '">' + escapeHtml(zone.name) + " (" + escapeHtml(zone.region) + ')</option>')).join("");
           if (state.bunnyZones[0] && !els.bunnyZoneSelect.value.trim()) {
             els.bunnyZoneSelect.value = state.bunnyZones[0].name;
