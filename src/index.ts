@@ -445,7 +445,7 @@ function renderHtml(): string {
 
       function readUiState() {
         try {
-          const raw = window.sessionStorage.getItem(STORAGE_KEY);
+          const raw = window.localStorage.getItem(STORAGE_KEY);
           return raw ? JSON.parse(raw) : {};
         } catch {
           return {};
@@ -454,7 +454,7 @@ function renderHtml(): string {
 
       function writeUiState() {
         try {
-          window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
             awsAccessKeyId: els.awsAccessKeyId.value,
             awsSecretAccessKey: els.awsSecretAccessKey.value,
             awsSessionToken: els.awsSessionToken.value,
