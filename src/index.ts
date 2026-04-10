@@ -199,6 +199,7 @@ function renderHtml(): string {
     .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);background:rgba(255,255,255,.72);border-radius:999px;padding:9px 14px;font-size:13px;color:var(--muted)}
     .pill strong{color:var(--text)}
     .layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+    .contents-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:stretch;margin-top:18px}
     .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(16px);overflow:hidden}
     .panel-head{padding:18px 18px 14px;border-bottom:1px solid rgba(47,45,41,.08)}
     .panel-head h2{margin:0 0 6px;font-size:20px}
@@ -219,7 +220,11 @@ function renderHtml(): string {
     .secondary{background:rgba(255,255,255,.84);color:var(--text);border:1px solid rgba(47,45,41,.16)}
     .ghost{background:transparent;color:var(--muted);border:1px solid rgba(47,45,41,.12)}
     button:disabled{opacity:.55;cursor:not-allowed;transform:none}
-    .list{border:1px solid rgba(47,45,41,.12);border-radius:16px;overflow:hidden;background:rgba(255,255,255,.72);min-height:360px;max-height:540px;overflow-y:auto}
+    .contents-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(16px);padding:18px;display:flex;flex-direction:column;min-height:450px}
+    .contents-card h3{margin:0 0 10px;font-size:18px}
+    .contents-card .inline-note{margin:0 0 12px}
+    .list{border:1px solid rgba(47,45,41,.12);border-radius:16px;overflow:hidden;background:rgba(255,255,255,.72);overflow-y:auto}
+    .contents-list{flex:1;min-height:0}
     .list-head,.list-row{display:grid;grid-template-columns:34px minmax(0,1fr) 120px 140px;align-items:center;gap:10px;padding:10px 12px}
     .list-head{position:sticky;top:0;background:rgba(244,241,234,.96);border-bottom:1px solid rgba(47,45,41,.08);font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.03em;z-index:1}
     .list-row{border-bottom:1px solid rgba(47,45,41,.06)}
@@ -241,7 +246,7 @@ function renderHtml(): string {
     .jobs-list{min-height:220px}
     .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.2fr) 100px 120px minmax(0,1.6fr)}
     .error{color:#b42318}
-    @media (max-width:1100px){.layout{grid-template-columns:1fr}}
+    @media (max-width:1100px){.layout,.contents-layout{grid-template-columns:1fr}}
     @media (max-width:720px){.grid-2{grid-template-columns:1fr}.list-head,.list-row{grid-template-columns:34px minmax(0,1fr) 86px}.size-col{display:none}}
   </style>
 </head>
@@ -287,8 +292,6 @@ function renderHtml(): string {
             <div class="field" style="margin:0"><label for="awsPrefix">Path</label><input id="awsPrefix" autocomplete="off" spellcheck="false" placeholder="optional/prefix/" value="" /></div>
             <button class="secondary" id="loadAwsPath">Go</button>
           </div>
-          <div class="inline-note" id="awsStatus">Load a bucket to see folders and files.</div>
-          <div class="list" id="awsList" aria-live="polite"></div>
         </div>
       </article>
 
@@ -311,9 +314,20 @@ function renderHtml(): string {
             <div class="field" style="margin:0"><label for="bunnyPrefix">Path</label><input id="bunnyPrefix" autocomplete="off" spellcheck="false" placeholder="destination/prefix/" value="" /></div>
             <button class="secondary" id="loadBunnyPath">Go</button>
           </div>
-          <div class="inline-note" id="bunnyStatus">Load a zone to browse its contents.</div>
-          <div class="list" id="bunnyList" aria-live="polite"></div>
         </div>
+      </article>
+    </section>
+
+    <section class="contents-layout">
+      <article class="contents-card">
+        <h3>AWS contents</h3>
+        <div class="inline-note" id="awsStatus">Load a bucket to see folders and files.</div>
+        <div class="list contents-list" id="awsList" aria-live="polite"></div>
+      </article>
+      <article class="contents-card">
+        <h3>Bunny contents</h3>
+        <div class="inline-note" id="bunnyStatus">Load a zone to browse its contents.</div>
+        <div class="list contents-list" id="bunnyList" aria-live="polite"></div>
       </article>
     </section>
 
