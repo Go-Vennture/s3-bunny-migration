@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "s3-bunny-migration",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-10",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRANSFER_MANAGER",
+        "class_name": "TransferManager"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TransferManager"]
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
