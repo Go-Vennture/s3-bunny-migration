@@ -899,6 +899,7 @@ async function handleBunnyZones(request: Request): Promise<Response> {
   const obj = body as Record<string, unknown>;
   const apiKey = typeof obj.apiKey === "string" ? obj.apiKey : "";
   if (!apiKey) throw new Error("Missing apiKey.");
+  console.log("[bunny] /api/bunny/zones requested");
   return json({ zones: await listBunnyZones(apiKey) });
 }
 
@@ -1302,9 +1303,16 @@ async function listBunnyZones(apiKey: string): Promise<BunnyZone[]> {
   const response = await fetch("https://api.bunny.net/storagezone", {
     headers: { AccessKey: apiKey },
   });
-  if (!response.ok) throw new Error(await response.text());
-  const payload = (await response.json()) as { Items?: BunnyZone[]; items?: BunnyZone[] };
-  return (payload.Items || payload.items || [])
+  const rawText = await response.text();
+  console.log("[bunny] storagezone response", {
+    ok: response.ok,
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    bodyPreview: rawText.slice(0, 500),
+  });
+  if (!response.ok) throw new Error(rawText);
+  const payload = JSON.parse(rawText) as { Items?: BunnyZone[]; items?: BunnyZone[] };
+  const zones = (payload.Items || payload.items || [])
     .filter((zone) => !zone.deleted)
     .map((zone) => ({
       id: zone.id,
@@ -1313,6 +1321,8 @@ async function listBunnyZones(apiKey: string): Promise<BunnyZone[]> {
       password: zone.password,
       deleted: zone.deleted,
     }));
+  console.log("[bunny] parsed storage zones", { count: zones.length });
+  return zones;
 }
 
 async function resolveBunnyZone(apiKey: string, zoneName: string): Promise<ResolvedBunnyZone> {
