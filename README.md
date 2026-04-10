@@ -42,7 +42,6 @@ npm run dev
 
 - AWS access key ID
 - AWS secret access key
-- AWS region
 - Bunny account API key
 
 ## Deployment

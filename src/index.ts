@@ -12,6 +12,10 @@ type S3Bucket = {
   creationDate?: string;
 };
 
+type AwsBucket = S3Bucket & {
+  region: string;
+};
+
 type S3Item = {
   key: string;
   size: number;
@@ -200,6 +204,7 @@ function renderHtml(): string {
     .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
     .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
     .field{display:grid;gap:6px;flex:1 1 240px}
+    .wide-field{flex:1 1 100%;min-width:0}
     .field label{font-size:12px;letter-spacing:.03em;color:var(--muted);font-weight:700}
     .field input,.field select{width:100%;min-height:42px;border-radius:12px;border:1px solid rgba(47,45,41,.18);background:rgba(255,255,255,.92);color:var(--text);padding:10px 12px;font:inherit}
     .field input:focus,.field select:focus,button:focus{outline:2px solid rgba(15,118,110,.26);outline-offset:2px}
@@ -260,19 +265,19 @@ function renderHtml(): string {
           <div class="grid-2">
             <div class="field"><label for="awsAccessKeyId">AWS access key ID</label><input id="awsAccessKeyId" autocomplete="off" spellcheck="false" /></div>
             <div class="field"><label for="awsSecretAccessKey">AWS secret access key</label><input id="awsSecretAccessKey" type="password" autocomplete="off" spellcheck="false" /></div>
-            <div class="field"><label for="awsSessionToken">AWS session token</label><input id="awsSessionToken" autocomplete="off" spellcheck="false" placeholder="Optional" /></div>
-            <div class="field"><label for="awsRegion">AWS region (optional)</label><input id="awsRegion" autocomplete="off" spellcheck="false" value="us-east-1" /></div>
           </div>
           <div class="row">
-            <div class="field">
+            <div class="field wide-field">
               <label for="awsBucketSelect">Bucket</label>
               <select id="awsBucketSelect"><option value="">Load buckets first</option></select>
             </div>
-            <div class="field">
-              <label for="awsBucketName">Or type bucket name</label>
-              <input id="awsBucketName" autocomplete="off" spellcheck="false" placeholder="bucket-name" />
-            </div>
             <button class="secondary" id="loadAwsBuckets">Refresh buckets</button>
+          </div>
+          <div class="row">
+            <div class="field wide-field">
+              <label for="awsRegion">AWS region</label>
+              <select id="awsRegion"><option value="">Load buckets first</option></select>
+            </div>
           </div>
           <div class="pathbar">
             <button class="ghost mini" id="awsUp" title="Parent folder">..</button>
@@ -364,10 +369,8 @@ function renderHtml(): string {
       const els = {
         awsAccessKeyId: $("awsAccessKeyId"),
         awsSecretAccessKey: $("awsSecretAccessKey"),
-        awsSessionToken: $("awsSessionToken"),
         awsRegion: $("awsRegion"),
         awsBucketSelect: $("awsBucketSelect"),
-        awsBucketName: $("awsBucketName"),
         awsPrefix: $("awsPrefix"),
         awsList: $("awsList"),
         awsStatus: $("awsStatus"),
@@ -399,6 +402,8 @@ function renderHtml(): string {
 
       const state = {
         awsItems: [],
+        awsBuckets: [],
+        awsBucketRegions: new Map(),
         bunnyItems: [],
         awsSelections: new Map(),
         awsContinuationToken: null,
@@ -449,7 +454,11 @@ function renderHtml(): string {
       }
 
       function selectedBucket() {
-        return els.awsBucketName.value.trim() || els.awsBucketSelect.value.trim();
+        return els.awsBucketSelect.value.trim();
+      }
+
+      function selectedAwsRegion() {
+        return els.awsRegion.value.trim() || state.awsBucketRegions.get(selectedBucket()) || "us-east-1";
       }
 
       function selectedZone() {
@@ -491,9 +500,7 @@ function renderHtml(): string {
             expiresAt: Date.now() + STORAGE_TTL_MS,
             awsAccessKeyId: els.awsAccessKeyId.value,
             awsSecretAccessKey: els.awsSecretAccessKey.value,
-            awsSessionToken: els.awsSessionToken.value,
             awsRegion: els.awsRegion.value,
-            awsBucketName: els.awsBucketName.value,
             awsBucketSelect: els.awsBucketSelect.value,
             awsPrefix: els.awsPrefix.value,
             bunnyApiKey: els.bunnyApiKey.value,
@@ -505,7 +512,7 @@ function renderHtml(): string {
             awsSelections: Array.from(state.awsSelections.keys()),
           }));
         } catch {
-          // Session storage can be unavailable in some browser privacy modes.
+          // Local storage can be unavailable in some browser privacy modes.
         }
       }
 
@@ -513,9 +520,7 @@ function renderHtml(): string {
         const saved = readUiState();
         els.awsAccessKeyId.value = saved.awsAccessKeyId || "";
         els.awsSecretAccessKey.value = saved.awsSecretAccessKey || "";
-        els.awsSessionToken.value = saved.awsSessionToken || "";
-        els.awsRegion.value = saved.awsRegion || "us-east-1";
-        els.awsBucketName.value = saved.awsBucketName || "";
+        els.awsRegion.value = saved.awsRegion || "";
         els.awsBucketSelect.value = saved.awsBucketSelect || "";
         els.awsPrefix.value = saved.awsPrefix || "";
         els.bunnyApiKey.value = saved.bunnyApiKey || "";
@@ -604,6 +609,32 @@ function renderHtml(): string {
         });
       }
 
+      function renderAwsRegions() {
+        const counts = new Map();
+        for (const bucket of state.awsBuckets) {
+          const region = bucket.region || "us-east-1";
+          counts.set(region, (counts.get(region) || 0) + 1);
+        }
+        const regions = Array.from(counts.keys());
+        els.awsRegion.innerHTML = regions.length
+          ? ['<option value="">Choose a region</option>'].concat(
+              regions.map((region) => {
+                const count = counts.get(region) || 0;
+                const label = count > 1 ? region + " (" + String(count) + " buckets)" : region + " (1 bucket)";
+                return '<option value="' + escapeHtml(region) + '">' + escapeHtml(label) + '</option>';
+              }),
+            ).join("")
+          : '<option value="">Load buckets first</option>';
+      }
+
+      function syncBucketRegion() {
+        const region = state.awsBucketRegions.get(selectedBucket());
+        if (region) {
+          els.awsRegion.value = region;
+        }
+        writeUiState();
+      }
+
       function renderJobs() {
         const header = '<div class="list-head"><div>Job</div><div>Status</div><div>Progress</div><div>Details</div></div>';
         if (!state.jobs.length) {
@@ -647,15 +678,17 @@ function renderHtml(): string {
           const payload = await postJson("/api/aws/buckets", {
             accessKeyId: els.awsAccessKeyId.value.trim(),
             secretAccessKey: els.awsSecretAccessKey.value.trim(),
-            sessionToken: els.awsSessionToken.value.trim() || undefined,
-            region: els.awsRegion.value.trim() || "us-east-1",
           });
-          state.awsBuckets = payload.buckets || [];
-          els.awsBucketSelect.innerHTML = ['<option value="">Choose a bucket</option>'].concat(state.awsBuckets.map((bucket) => '<option value="' + escapeHtml(bucket.name) + '">' + escapeHtml(bucket.name) + '</option>')).join("");
-          if (state.awsBuckets[0] && !els.awsBucketName.value.trim()) {
+          state.awsBuckets = Array.isArray(payload.buckets) ? payload.buckets : [];
+          state.awsBucketRegions = new Map(state.awsBuckets.map((bucket) => [bucket.name, bucket.region || "us-east-1"]));
+          els.awsBucketSelect.innerHTML = ['<option value="">Choose a bucket</option>'].concat(
+            state.awsBuckets.map((bucket) => '<option value="' + escapeHtml(bucket.name) + '">' + escapeHtml(bucket.name) + '</option>'),
+          ).join("");
+          renderAwsRegions();
+          if (state.awsBuckets[0] && !els.awsBucketSelect.value) {
             els.awsBucketSelect.value = state.awsBuckets[0].name;
-            els.awsBucketName.value = state.awsBuckets[0].name;
           }
+          syncBucketRegion();
           setStatus(els.awsStatus, String(state.awsBuckets.length) + " bucket(s) loaded.");
           log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
         } catch (error) {
@@ -667,7 +700,7 @@ function renderHtml(): string {
       async function loadAwsPath(append = false) {
         const bucket = selectedBucket();
         if (!bucket) {
-          log("Choose or type an AWS bucket first.", "error");
+          log("Choose an AWS bucket first.", "error");
           return;
         }
         if (!append) {
@@ -679,8 +712,7 @@ function renderHtml(): string {
           const payload = await postJson("/api/aws/list", {
             accessKeyId: els.awsAccessKeyId.value.trim(),
             secretAccessKey: els.awsSecretAccessKey.value.trim(),
-            sessionToken: els.awsSessionToken.value.trim() || undefined,
-            region: els.awsRegion.value.trim() || "us-east-1",
+            region: selectedAwsRegion(),
             bucket,
             prefix: ensureTrailingSlash(els.awsPrefix.value),
             continuationToken: append ? state.awsContinuationToken : undefined,
@@ -752,8 +784,8 @@ function renderHtml(): string {
         }
       }
 
-      function syncBucketInput() {
-        if (els.awsBucketSelect.value) els.awsBucketName.value = els.awsBucketSelect.value;
+      function syncBucketRegionSelection() {
+        syncBucketRegion();
       }
 
       function syncZoneInput() {
@@ -784,8 +816,7 @@ function renderHtml(): string {
             aws: {
               accessKeyId: els.awsAccessKeyId.value.trim(),
               secretAccessKey: els.awsSecretAccessKey.value.trim(),
-              sessionToken: els.awsSessionToken.value.trim() || undefined,
-              region: els.awsRegion.value.trim() || "us-east-1",
+              region: selectedAwsRegion(),
             },
             sourceBucket: bucket,
             selections,
@@ -811,9 +842,7 @@ function renderHtml(): string {
       [
         els.awsAccessKeyId,
         els.awsSecretAccessKey,
-        els.awsSessionToken,
         els.awsRegion,
-        els.awsBucketName,
         els.awsBucketSelect,
         els.awsPrefix,
         els.bunnyApiKey,
@@ -839,7 +868,7 @@ function renderHtml(): string {
         log("Selection cleared.");
         writeUiState();
       });
-      els.awsBucketSelect.addEventListener("change", syncBucketInput);
+      els.awsBucketSelect.addEventListener("change", syncBucketRegionSelection);
       els.bunnyZoneSelect.addEventListener("change", syncZoneInput);
       els.awsUp.addEventListener("click", () => {
         els.awsPrefix.value = parentPrefix(els.awsPrefix.value);
@@ -1001,10 +1030,23 @@ function requireString(value: unknown, label: string): string {
   return value.trim();
 }
 
-async function listAwsBuckets(creds: AwsCredentials): Promise<S3Bucket[]> {
-  const response = await signedS3Request(creds, "GET", "/", new URLSearchParams(), undefined);
+async function listAwsBuckets(creds: AwsCredentials): Promise<AwsBucket[]> {
+  const response = await signedS3RequestToHost(creds, "GET", "s3.amazonaws.com", "us-east-1", "/", new URLSearchParams(), undefined);
   if (!response.ok) throw new Error(await response.text());
-  return parseBucketsXml(await response.text());
+  const buckets = parseBucketsXml(await response.text());
+  const regions = await Promise.all(
+    buckets.map(async (bucket) => {
+      try {
+        return await resolveAwsBucketRegion(creds, bucket.name);
+      } catch {
+        return creds.region || "us-east-1";
+      }
+    }),
+  );
+  return buckets.map((bucket, index) => ({
+    ...bucket,
+    region: regions[index] || "us-east-1",
+  }));
 }
 
 async function listAwsObjects(
@@ -1049,7 +1091,18 @@ async function signedS3Request(
   query: URLSearchParams,
   body?: BodyInit | null,
 ): Promise<Response> {
-  const host = `s3.${creds.region}.amazonaws.com`;
+  return signedS3RequestToHost(creds, method, `s3.${creds.region}.amazonaws.com`, creds.region, path, query, body);
+}
+
+async function signedS3RequestToHost(
+  creds: AwsCredentials,
+  method: string,
+  host: string,
+  signingRegion: string,
+  path: string,
+  query: URLSearchParams,
+  body?: BodyInit | null,
+): Promise<Response> {
   const url = `https://${host}${encodeUrlPath(path)}${query.toString() ? `?${query.toString()}` : ""}`;
   const amzDate = toAmzDate(new Date());
   const dateStamp = amzDate.slice(0, 8);
@@ -1069,7 +1122,7 @@ async function signedS3Request(
       headers,
       payloadHash,
       dateStamp,
-      region: creds.region,
+      region: signingRegion,
       accessKeyId: creds.accessKeyId,
       secretAccessKey: creds.secretAccessKey,
     }),
@@ -1190,6 +1243,22 @@ function parseBucketsXml(xml: string): S3Bucket[] {
   }));
 }
 
+async function resolveAwsBucketRegion(creds: AwsCredentials, bucket: string): Promise<string> {
+  const query = new URLSearchParams();
+  query.set("location", "");
+  const response = await signedS3RequestToHost(creds, "GET", "s3.amazonaws.com", "us-east-1", `/${bucket}`, query, undefined);
+  if (!response.ok) throw new Error(await response.text());
+  const xml = await response.text();
+  return normalizeAwsRegionLocation(extractTagFlexible(xml, "LocationConstraint"));
+}
+
+function normalizeAwsRegionLocation(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "null") return "us-east-1";
+  if (trimmed === "EU") return "eu-west-1";
+  return trimmed;
+}
+
 function parseObjectsXml(xml: string): { items: S3Item[]; nextContinuationToken?: string } {
   const items: S3Item[] = [];
   for (const block of matchBlocks(xml, "CommonPrefixes")) {
@@ -1226,6 +1295,12 @@ function matchBlocks(xml: string, tag: string): string[] {
 
 function extractTag(xml: string, tag: string): string {
   const pattern = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`);
+  const match = xml.match(pattern);
+  return match ? decodeXml(match[1]) : "";
+}
+
+function extractTagFlexible(xml: string, tag: string): string {
+  const pattern = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`);
   const match = xml.match(pattern);
   return match ? decodeXml(match[1]) : "";
 }
