@@ -223,6 +223,10 @@ function renderHtml(): string {
     .contents-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(16px);padding:18px;display:flex;flex-direction:column;min-height:450px}
     .contents-card h3{margin:0 0 10px;font-size:18px}
     .contents-card .inline-note{margin:0 0 12px}
+    .contents-controls{display:grid;gap:12px;margin-bottom:12px}
+    .contents-select-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}
+    .contents-path-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:end}
+    .contents-path-row .field{margin:0}
     .list{border:1px solid rgba(47,45,41,.12);border-radius:16px;overflow:hidden;background:rgba(255,255,255,.72);overflow-y:auto}
     .contents-list{flex:1;min-height:0}
     .list-head,.list-row{display:grid;grid-template-columns:34px minmax(0,1fr) 120px 140px;align-items:center;gap:10px;padding:10px 12px}
@@ -274,18 +278,6 @@ function renderHtml(): string {
             <div class="field"><label for="awsAccessKeyId">AWS access key ID</label><input id="awsAccessKeyId" autocomplete="off" spellcheck="false" /></div>
             <div class="field"><label for="awsSecretAccessKey">AWS secret access key</label><input id="awsSecretAccessKey" type="password" autocomplete="off" spellcheck="false" /></div>
           </div>
-          <div class="row">
-            <div class="field wide-field">
-              <label for="awsBucketSelect">Bucket</label>
-              <select id="awsBucketSelect"><option value="">Load buckets first</option></select>
-            </div>
-            <button class="secondary" id="loadAwsBuckets">Refresh buckets</button>
-          </div>
-          <div class="pathbar">
-            <button class="ghost mini" id="awsUp" title="Parent folder">..</button>
-            <div class="field" style="margin:0"><label for="awsPrefix">Path</label><input id="awsPrefix" autocomplete="off" spellcheck="false" placeholder="optional/prefix/" value="" /></div>
-            <button class="secondary" id="loadAwsPath">Go</button>
-          </div>
         </div>
       </article>
 
@@ -296,18 +288,6 @@ function renderHtml(): string {
         </div>
         <div class="panel-body">
           <div class="field"><label for="bunnyApiKey">Bunny account API key</label><input id="bunnyApiKey" type="password" autocomplete="off" spellcheck="false" /></div>
-          <div class="row">
-            <div class="field wide-field">
-              <label for="bunnyZoneSelect">Storage zone</label>
-              <select id="bunnyZoneSelect"><option value="">Load zones first</option></select>
-            </div>
-            <button class="secondary" id="loadBunnyZones">Refresh zones</button>
-          </div>
-          <div class="pathbar">
-            <button class="ghost mini" id="bunnyUp" title="Parent folder">..</button>
-            <div class="field" style="margin:0"><label for="bunnyPrefix">Path</label><input id="bunnyPrefix" autocomplete="off" spellcheck="false" placeholder="destination/prefix/" value="" /></div>
-            <button class="secondary" id="loadBunnyPath">Go</button>
-          </div>
         </div>
       </article>
     </section>
@@ -316,11 +296,39 @@ function renderHtml(): string {
       <article class="contents-card">
         <h3>AWS contents</h3>
         <div class="inline-note" id="awsStatus">Load a bucket to see folders and files.</div>
+        <div class="contents-controls">
+          <div class="contents-select-row">
+            <div class="field" style="margin:0">
+              <label for="awsBucketSelect">Bucket</label>
+              <select id="awsBucketSelect"><option value="">Load buckets first</option></select>
+            </div>
+            <button class="secondary" id="loadAwsBuckets">Refresh buckets</button>
+          </div>
+          <div class="contents-path-row">
+            <button class="ghost mini" id="awsUp" title="Parent folder">..</button>
+            <div class="field" style="margin:0"><label for="awsPrefix">Path</label><input id="awsPrefix" autocomplete="off" spellcheck="false" placeholder="optional/prefix/" value="" /></div>
+            <button class="secondary" id="loadAwsPath">Refresh</button>
+          </div>
+        </div>
         <div class="list contents-list" id="awsList" aria-live="polite"></div>
       </article>
       <article class="contents-card">
         <h3>Bunny contents</h3>
         <div class="inline-note" id="bunnyStatus">Load a zone to browse its contents.</div>
+        <div class="contents-controls">
+          <div class="contents-select-row">
+            <div class="field" style="margin:0">
+              <label for="bunnyZoneSelect">Storage zone</label>
+              <select id="bunnyZoneSelect"><option value="">Load zones first</option></select>
+            </div>
+            <button class="secondary" id="loadBunnyZones">Refresh zones</button>
+          </div>
+          <div class="contents-path-row">
+            <button class="ghost mini" id="bunnyUp" title="Parent folder">..</button>
+            <div class="field" style="margin:0"><label for="bunnyPrefix">Path</label><input id="bunnyPrefix" autocomplete="off" spellcheck="false" placeholder="destination/prefix/" value="" /></div>
+            <button class="secondary" id="loadBunnyPath">Refresh</button>
+          </div>
+        </div>
         <div class="list contents-list" id="bunnyList" aria-live="polite"></div>
       </article>
     </section>
@@ -664,6 +672,7 @@ function renderHtml(): string {
           }
           setStatus(els.awsStatus, String(state.awsBuckets.length) + " bucket(s) loaded.");
           log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
+          if (selectedBucket()) void loadAwsPath(false);
         } catch (error) {
           setStatus(els.awsStatus, "Could not load buckets.", "error");
           log(errorMessage(error), "error");
@@ -717,6 +726,7 @@ function renderHtml(): string {
           }
           setStatus(els.bunnyStatus, String(state.bunnyZones.length) + " zone(s) loaded.");
           log("Loaded " + String(state.bunnyZones.length) + " Bunny storage zone(s).");
+          if (selectedZone()) void loadBunnyPath();
         } catch (error) {
           setStatus(els.bunnyStatus, "Could not load zones.", "error");
           log(errorMessage(error), "error");
@@ -843,6 +853,30 @@ function renderHtml(): string {
       els.bunnyUp.addEventListener("click", () => {
         els.bunnyPrefix.value = parentPrefix(els.bunnyPrefix.value);
         loadBunnyPath();
+      });
+      els.awsBucketSelect.addEventListener("change", () => {
+        void loadAwsPath(false);
+      });
+      els.bunnyZoneSelect.addEventListener("change", () => {
+        void loadBunnyPath();
+      });
+      els.awsPrefix.addEventListener("change", () => {
+        void loadAwsPath(false);
+      });
+      els.bunnyPrefix.addEventListener("change", () => {
+        void loadBunnyPath();
+      });
+      els.awsPrefix.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void loadAwsPath(false);
+        }
+      });
+      els.bunnyPrefix.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void loadBunnyPath();
+        }
       });
       els.destinationPrefix.addEventListener("input", syncSummary);
       els.awsList.addEventListener("change", (event) => {
