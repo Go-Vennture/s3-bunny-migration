@@ -48,6 +48,7 @@ type TransferSelection = {
 type TransferRequest = {
   aws: AwsCredentials;
   sourceBucket: string;
+  sourcePrefix: string;
   selections: TransferSelection[];
   bunnyApiKey: string;
   destinationZone: string;
@@ -68,6 +69,7 @@ type TransferJobSelection = TransferSelection;
 type TransferJobCreateRequest = {
   aws: AwsCredentials;
   sourceBucket: string;
+  sourcePrefix: string;
   selections: TransferJobSelection[];
   destinationPrefix?: string;
   bunnyZone: ResolvedBunnyZone;
@@ -113,6 +115,7 @@ type TransferJobRow = {
   status: string;
   source_bucket: string;
   source_region: string;
+  source_prefix: string;
   aws_access_key_id: string;
   aws_secret_access_key: string;
   aws_session_token: string | null;
@@ -340,10 +343,9 @@ function renderHtml(): string {
           <span class="selection-pill" id="selectionCount">0 selected</span>
           <span class="pill" id="destinationSummary">Destination root</span>
         </div>
-        <div class="grid-2">
-          <div class="field"><label for="destinationPrefix">Destination prefix</label><input id="destinationPrefix" autocomplete="off" spellcheck="false" placeholder="backup/" value="" /></div>
-          <div class="field"><label for="pathMode">Path behavior</label><select id="pathMode"><option value="full" selected>Preserve full source paths</option></select></div>
-        </div>
+          <div class="grid-2">
+            <div class="field"><label>Path behavior</label><input value="Preserve relative paths from the selected source and destination points" disabled /></div>
+          </div>
         <div class="row">
           <button class="primary" id="transferButton">Start background transfer</button>
           <button class="secondary" id="clearSelection">Clear selection</button>
@@ -401,13 +403,11 @@ function renderHtml(): string {
         loadBunnyPath: $("loadBunnyPath"),
         selectionCount: $("selectionCount"),
         destinationSummary: $("destinationSummary"),
-        destinationPrefix: $("destinationPrefix"),
         transferButton: $("transferButton"),
         clearSelection: $("clearSelection"),
         log: $("log"),
         jobsList: $("jobsList"),
         jobsStatus: $("jobsStatus"),
-        pathMode: $("pathMode"),
       };
 
       const STORAGE_KEY = "s3-bunny-migration:ui-state:v2";
@@ -518,8 +518,6 @@ function renderHtml(): string {
             bunnyApiKey: els.bunnyApiKey.value,
             bunnyZoneSelect: els.bunnyZoneSelect.value,
             bunnyPrefix: els.bunnyPrefix.value,
-            destinationPrefix: els.destinationPrefix.value,
-            pathMode: els.pathMode.value,
             awsSelections: Array.from(state.awsSelections.keys()),
           }));
         } catch {
@@ -536,8 +534,6 @@ function renderHtml(): string {
         els.bunnyApiKey.value = saved.bunnyApiKey || "";
         els.bunnyZoneSelect.value = saved.bunnyZoneSelect || "";
         els.bunnyPrefix.value = saved.bunnyPrefix || "";
-        els.destinationPrefix.value = saved.destinationPrefix || "";
-        if (saved.pathMode) els.pathMode.value = saved.pathMode;
         const selections = Array.isArray(saved.awsSelections) ? saved.awsSelections : [];
         state.awsSelections = new Map(selections.map((key) => [String(key), true]));
       }
@@ -549,7 +545,11 @@ function renderHtml(): string {
 
       function syncSummary() {
         els.selectionCount.textContent = String(state.awsSelections.size) + " selected";
-        els.destinationSummary.textContent = els.destinationPrefix.value.trim() ? "Destination: " + els.destinationPrefix.value.trim() : "Destination root";
+        const zone = selectedZone();
+        const destinationPrefix = ensureTrailingSlash(els.bunnyPrefix.value);
+        els.destinationSummary.textContent = zone
+          ? "Destination: " + zone + "/" + (destinationPrefix ? destinationPrefix : "")
+          : (destinationPrefix ? "Destination: " + destinationPrefix : "Destination root");
         writeUiState();
       }
 
@@ -670,6 +670,7 @@ function renderHtml(): string {
           if (state.awsBuckets[0] && !els.awsBucketSelect.value) {
             els.awsBucketSelect.value = state.awsBuckets[0].name;
           }
+          syncSummary();
           setStatus(els.awsStatus, String(state.awsBuckets.length) + " bucket(s) loaded.");
           log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
           if (selectedBucket()) void loadAwsPath(false);
@@ -724,6 +725,7 @@ function renderHtml(): string {
           if (state.bunnyZones[0] && !els.bunnyZoneSelect.value.trim()) {
             els.bunnyZoneSelect.value = state.bunnyZones[0].name;
           }
+          syncSummary();
           setStatus(els.bunnyStatus, String(state.bunnyZones.length) + " zone(s) loaded.");
           log("Loaded " + String(state.bunnyZones.length) + " Bunny storage zone(s).");
           if (selectedZone()) void loadBunnyPath();
@@ -799,10 +801,11 @@ function renderHtml(): string {
               region: selectedAwsRegion(),
             },
             sourceBucket: bucket,
+            sourcePrefix: ensureTrailingSlash(els.awsPrefix.value),
             selections,
             bunnyApiKey: els.bunnyApiKey.value.trim(),
             destinationZone: zone,
-            destinationPrefix: ensureTrailingSlash(els.destinationPrefix.value),
+            destinationPrefix: ensureTrailingSlash(els.bunnyPrefix.value),
           });
           log("Job " + payload.job.id + " queued.");
           setStatus(els.awsStatus, "Job queued: " + payload.job.id);
@@ -827,8 +830,6 @@ function renderHtml(): string {
         els.bunnyApiKey,
         els.bunnyZoneSelect,
         els.bunnyPrefix,
-        els.destinationPrefix,
-        els.pathMode,
       ].forEach((element) => {
         element.addEventListener("input", writeUiState);
         element.addEventListener("change", writeUiState);
@@ -848,22 +849,27 @@ function renderHtml(): string {
       });
       els.awsUp.addEventListener("click", () => {
         els.awsPrefix.value = parentPrefix(els.awsPrefix.value);
+        syncSummary();
         loadAwsPath(false);
       });
       els.bunnyUp.addEventListener("click", () => {
         els.bunnyPrefix.value = parentPrefix(els.bunnyPrefix.value);
+        syncSummary();
         loadBunnyPath();
       });
       els.awsBucketSelect.addEventListener("change", () => {
+        syncSummary();
         void loadAwsPath(false);
       });
       els.bunnyZoneSelect.addEventListener("change", () => {
+        syncSummary();
         void loadBunnyPath();
       });
       els.awsPrefix.addEventListener("change", () => {
         void loadAwsPath(false);
       });
       els.bunnyPrefix.addEventListener("change", () => {
+        syncSummary();
         void loadBunnyPath();
       });
       els.awsPrefix.addEventListener("keydown", (event) => {
@@ -878,7 +884,7 @@ function renderHtml(): string {
           void loadBunnyPath();
         }
       });
-      els.destinationPrefix.addEventListener("input", syncSummary);
+      els.bunnyPrefix.addEventListener("input", syncSummary);
       els.awsList.addEventListener("change", (event) => {
         const target = event.target;
         if (target instanceof HTMLInputElement && target.dataset.key) {
@@ -957,6 +963,7 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
   const job = await manager.createJob({
     aws: transfer.aws,
     sourceBucket: transfer.sourceBucket,
+    sourcePrefix: transfer.sourcePrefix,
     selections: transfer.selections,
     destinationPrefix: transfer.destinationPrefix || "",
     bunnyZone: zone,
@@ -1026,6 +1033,7 @@ function parseTransferRequest(body: unknown): TransferRequest {
       region: typeof aws.region === "string" && aws.region.trim() ? aws.region.trim() : "us-east-1",
     },
     sourceBucket: requireString(obj.sourceBucket, "sourceBucket"),
+    sourcePrefix: typeof obj.sourcePrefix === "string" ? obj.sourcePrefix : "",
     selections,
     bunnyApiKey: requireString(obj.bunnyApiKey, "bunnyApiKey"),
     destinationZone: requireString(obj.destinationZone, "destinationZone"),
@@ -1427,12 +1435,13 @@ async function buildTransferPlan(
   aws: AwsCredentials,
   bucket: string,
   selections: TransferSelection[],
+  sourcePrefix: string,
 ): Promise<TransferPlanEntry[]> {
   const plan: TransferPlanEntry[] = [];
   for (const selection of selections) {
     if (selection.kind === "file") {
       if (!selection.key.endsWith("/")) {
-        plan.push({ sourceKey: selection.key, destinationKey: selection.key });
+        plan.push({ sourceKey: selection.key, destinationKey: relativePathFromPrefix(sourcePrefix, selection.key) });
       }
       continue;
     }
@@ -1440,11 +1449,19 @@ async function buildTransferPlan(
     const objects = await listAllS3Objects(aws, bucket, prefix);
     for (const object of objects) {
       if (!object.key.endsWith("/")) {
-        plan.push({ sourceKey: object.key, destinationKey: object.key });
+        plan.push({ sourceKey: object.key, destinationKey: relativePathFromPrefix(sourcePrefix, object.key) });
       }
     }
   }
   return dedupePlan(plan);
+}
+
+function relativePathFromPrefix(prefix: string, key: string): string {
+  const trimmedPrefix = prefix.trim();
+  const cleanPrefix = trimmedPrefix ? (trimmedPrefix.endsWith("/") ? trimmedPrefix : `${trimmedPrefix}/`) : "";
+  const cleanKey = key.replace(/^\/+/, "");
+  if (!cleanPrefix) return cleanKey;
+  return cleanKey.startsWith(cleanPrefix) ? cleanKey.slice(cleanPrefix.length) : cleanKey;
 }
 
 function dedupePlan(plan: TransferPlanEntry[]): TransferPlanEntry[] {
@@ -1567,6 +1584,7 @@ export class TransferManager extends DurableObject<Env> {
           status TEXT NOT NULL,
           source_bucket TEXT NOT NULL,
           source_region TEXT NOT NULL,
+          source_prefix TEXT NOT NULL DEFAULT '',
           aws_access_key_id TEXT NOT NULL,
           aws_secret_access_key TEXT NOT NULL,
           aws_session_token TEXT,
@@ -1587,6 +1605,10 @@ export class TransferManager extends DurableObject<Env> {
           message TEXT
         )
       `);
+      const columns = this.ctx.storage.sql.exec<{ name: string }>(`PRAGMA table_info(jobs)`).toArray();
+      if (!columns.some((column) => column.name === "source_prefix")) {
+        this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN source_prefix TEXT NOT NULL DEFAULT ''`);
+      }
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS job_events (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1609,12 +1631,13 @@ export class TransferManager extends DurableObject<Env> {
         INSERT INTO jobs (
           id, created_at, updated_at, status,
           source_bucket, source_region,
+          source_prefix,
           aws_access_key_id, aws_secret_access_key, aws_session_token,
           destination_zone, destination_zone_region, destination_zone_password,
           destination_prefix, selections_json,
           current_selection_index, current_folder_prefix, current_folder_page_json, current_folder_continuation_token,
           copied, failed, processed, last_key, last_error, message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       id,
       now,
@@ -1622,6 +1645,7 @@ export class TransferManager extends DurableObject<Env> {
       "queued",
       input.sourceBucket,
       input.aws.region,
+      input.sourcePrefix || "",
       input.aws.accessKeyId,
       input.aws.secretAccessKey,
       input.aws.sessionToken || null,
@@ -1753,7 +1777,7 @@ export class TransferManager extends DurableObject<Env> {
           },
           selection.key,
           job.destination_prefix,
-          selection.key,
+          relativePathFromPrefix(job.source_prefix, selection.key),
         );
         this.updateJob(job.id, {
           copied: job.copied + 1,
@@ -1883,7 +1907,7 @@ export class TransferManager extends DurableObject<Env> {
         },
         key,
         job.destination_prefix,
-        key,
+        relativePathFromPrefix(job.source_prefix, key),
       );
       page.index += 1;
       const isPageDone = page.index >= page.keys.length;
