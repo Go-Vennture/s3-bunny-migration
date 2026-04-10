@@ -1300,7 +1300,9 @@ function decodeXml(value: string): string {
 }
 
 async function listBunnyZones(apiKey: string): Promise<BunnyZone[]> {
-  const response = await fetch("https://api.bunny.net/storagezone", {
+  const url = new URL("https://api.bunny.net/storagezone");
+  url.searchParams.set("perPage", "1000");
+  const response = await fetch(url, {
     headers: { AccessKey: apiKey },
   });
   const rawText = await response.text();
