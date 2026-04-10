@@ -167,7 +167,7 @@ export default {
 } satisfies ExportedHandler<AppEnv>;
 
 function renderHtml(): string {
-  return `<!doctype html>
+  return String.raw`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
