@@ -231,7 +231,7 @@ function renderHtml(): string {
     .contents-path-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:end}
     .contents-path-row .field{margin:0}
     .list{border:1px solid rgba(47,45,41,.12);border-radius:16px;overflow:hidden;background:rgba(255,255,255,.72);overflow-y:auto}
-    .contents-list{flex:1;min-height:0}
+    .contents-list{flex:none;height:540px;min-height:0;overflow-y:auto}
     .list-head,.list-row{display:grid;grid-template-columns:34px minmax(0,1fr) 120px 140px;align-items:center;gap:10px;padding:10px 12px}
     .list-head{position:sticky;top:0;background:rgba(244,241,234,.96);border-bottom:1px solid rgba(47,45,41,.08);font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.03em;z-index:1}
     .list-row{border-bottom:1px solid rgba(47,45,41,.06)}
