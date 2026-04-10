@@ -342,6 +342,25 @@ function renderHtml(): string {
   <script>
     (() => {
       const $ = (id) => document.getElementById(id);
+      const bootError = (message) => {
+        const existing = document.getElementById("log");
+        const text = "Application error: " + message;
+        if (existing) {
+          const row = document.createElement("div");
+          row.innerHTML = '<span class="error"><strong>Error:</strong> ' + text.replace(/[&<>"']/g, (character) => {
+            if (character === "&") return "&amp;";
+            if (character === "<") return "&lt;";
+            if (character === ">") return "&gt;";
+            if (character === '"') return "&quot;";
+            return "&#39;";
+          }) + '</span>';
+          existing.appendChild(row);
+        } else {
+          console.error(text);
+        }
+      };
+
+      try {
       const els = {
         awsAccessKeyId: $("awsAccessKeyId"),
         awsSecretAccessKey: $("awsSecretAccessKey"),
@@ -375,7 +394,8 @@ function renderHtml(): string {
         pathMode: $("pathMode"),
       };
 
-      const STORAGE_KEY = "s3-bunny-migration:ui-state:v1";
+      const STORAGE_KEY = "s3-bunny-migration:ui-state:v2";
+      const STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 
       const state = {
         awsItems: [],
@@ -388,10 +408,10 @@ function renderHtml(): string {
 
       function escapeHtml(value) {
         return String(value)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;");
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
       }
 
       function formatBytes(bytes) {
@@ -443,10 +463,23 @@ function renderHtml(): string {
         els.log.scrollTop = els.log.scrollHeight;
       }
 
+      function errorMessage(error) {
+        return error instanceof Error ? error.message : String(error ?? "Unknown error");
+      }
+
       function readUiState() {
         try {
           const raw = window.localStorage.getItem(STORAGE_KEY);
-          return raw ? JSON.parse(raw) : {};
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object") return {};
+          const state = parsed;
+          const expiresAt = typeof state.expiresAt === "number" ? state.expiresAt : 0;
+          if (expiresAt && Date.now() > expiresAt) {
+            window.localStorage.removeItem(STORAGE_KEY);
+            return {};
+          }
+          return state;
         } catch {
           return {};
         }
@@ -455,6 +488,7 @@ function renderHtml(): string {
       function writeUiState() {
         try {
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            expiresAt: Date.now() + STORAGE_TTL_MS,
             awsAccessKeyId: els.awsAccessKeyId.value,
             awsSecretAccessKey: els.awsSecretAccessKey.value,
             awsSessionToken: els.awsSessionToken.value,
@@ -624,9 +658,9 @@ function renderHtml(): string {
           }
           setStatus(els.awsStatus, String(state.awsBuckets.length) + " bucket(s) loaded.");
           log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
-          } catch (error) {
+        } catch (error) {
           setStatus(els.awsStatus, "Could not load buckets.", "error");
-          log(error.message, "error");
+          log(errorMessage(error), "error");
         }
       }
 
@@ -657,7 +691,7 @@ function renderHtml(): string {
           setStatus(els.awsStatus, String(state.awsItems.length) + " item(s) visible." + (state.awsContinuationToken ? " More available." : ""));
         } catch (error) {
           setStatus(els.awsStatus, "Could not load bucket contents.", "error");
-          log(error.message, "error");
+          log(errorMessage(error), "error");
         }
       }
 
@@ -675,7 +709,7 @@ function renderHtml(): string {
           log("Loaded " + String(state.bunnyZones.length) + " Bunny storage zone(s).");
         } catch (error) {
           setStatus(els.bunnyStatus, "Could not load zones.", "error");
-          log(error.message, "error");
+          log(errorMessage(error), "error");
         }
       }
 
@@ -699,7 +733,7 @@ function renderHtml(): string {
           setStatus(els.bunnyStatus, String(state.bunnyItems.length) + " item(s) visible.");
         } catch (error) {
           setStatus(els.bunnyStatus, "Could not load zone contents.", "error");
-          log(error.message, "error");
+          log(errorMessage(error), "error");
         }
       }
 
@@ -714,7 +748,7 @@ function renderHtml(): string {
           renderJobs();
         } catch (error) {
           setStatus(els.jobsStatus, "Could not refresh jobs.", "error");
-          log(error.message, "error");
+          log(errorMessage(error), "error");
         }
       }
 
@@ -764,7 +798,7 @@ function renderHtml(): string {
           setStatus(els.bunnyStatus, "Job queued: " + payload.job.id);
           await refreshJobs();
         } catch (error) {
-          log(error.message, "error");
+          log(errorMessage(error), "error");
           setStatus(els.awsStatus, "Queue failed.", "error");
           setStatus(els.bunnyStatus, "Queue failed.", "error");
         } finally {
@@ -835,6 +869,9 @@ function renderHtml(): string {
         void refreshJobs();
       }, 5000);
       log("Enter credentials, load buckets and zones, then browse to the folders you want to migrate.");
+      } catch (error) {
+        bootError(errorMessage(error));
+      }
     })();
   </script>
 </body>
@@ -1195,11 +1232,11 @@ function extractTag(xml: string, tag: string): string {
 
 function decodeXml(value: string): string {
   return value
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'");
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
 }
 
 async function listBunnyZones(apiKey: string): Promise<BunnyZone[]> {
