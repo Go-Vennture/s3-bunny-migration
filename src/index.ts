@@ -821,6 +821,12 @@ function renderHtml(): string {
       }
 
       restoreUiState();
+      if (els.awsAccessKeyId.value.trim() && els.awsSecretAccessKey.value.trim()) {
+        void loadAwsBuckets();
+      }
+      if (els.bunnyApiKey.value.trim()) {
+        void loadBunnyZones();
+      }
 
       [
         els.awsAccessKeyId,
