@@ -872,6 +872,23 @@ function renderHtml(): string {
         els.jobsStatus.textContent = queueNotice || (running ? "Latest active job: " + running.id : "No active jobs.");
       }
 
+      function normalizeTransferSelections(selections) {
+        const ordered = selections.slice().sort((left, right) => {
+          const leftKey = left.kind === "folder" ? ensureTrailingSlash(left.key) : left.key.replace(/\/+$/, "");
+          const rightKey = right.kind === "folder" ? ensureTrailingSlash(right.key) : right.key.replace(/\/+$/, "");
+          return leftKey.length - rightKey.length || leftKey.localeCompare(rightKey);
+        });
+        const kept = [];
+        for (const selection of ordered) {
+          const key = selection.kind === "folder" ? ensureTrailingSlash(selection.key) : selection.key.replace(/\/+$/, "");
+          const covered = kept.some((existing) => existing.kind === "folder" && key.startsWith(ensureTrailingSlash(existing.key)));
+          if (!covered) {
+            kept.push({ kind: selection.kind, key });
+          }
+        }
+        return kept;
+      }
+
       async function postJsonResponse(path, body) {
         const response = await fetch(path, {
           method: "POST",
@@ -1071,10 +1088,10 @@ function renderHtml(): string {
       }
 
       async function startTransfer() {
-        const selections = Array.from(state.sourceSelections.keys()).map((key) => {
+        const selections = normalizeTransferSelections(Array.from(state.sourceSelections.keys()).map((key) => {
           const item = state.sourceItems.find((entry) => entry.key === key);
           return { kind: item && item.type === "folder" ? "folder" : "file", key };
-        });
+        }));
         if (!selections.length) {
           log("Select at least one file or folder to copy.", "error");
           return;
@@ -1087,9 +1104,12 @@ function renderHtml(): string {
         }
         els.transferButton.disabled = true;
         state.transferQueueNotice = "";
-        setStatus(els.transferStatus, "Checking destination for conflicts...");
-        setStatus(els.sourceStatus, "Checking destination for conflicts...");
-        setStatus(els.destinationStatus, "Checking destination for conflicts...");
+        const checkingMessage = "Checking " + String(selections.length) + " selected item(s) for conflicts...";
+        setStatus(els.transferStatus, checkingMessage);
+        setStatus(els.sourceStatus, checkingMessage);
+        setStatus(els.destinationStatus, checkingMessage);
+        state.transferQueueNotice = checkingMessage;
+        renderJobs();
         log("Checking transfer of " + String(selections.length) + " selected item(s).");
         try {
           const payload = {
@@ -1132,10 +1152,11 @@ function renderHtml(): string {
             log("Transfer cancelled.");
             return;
           }
-          setStatus(els.transferStatus, "Queueing background job...");
+          const queueMessage = "Queueing transfer of " + String(selections.length) + " selected item(s)...";
+          setStatus(els.transferStatus, queueMessage);
           setStatus(els.sourceStatus, "Queueing background job...");
           setStatus(els.destinationStatus, "Queueing background job...");
-          state.transferQueueNotice = "Queuing transfer of " + String(selections.length) + " selected item(s)...";
+          state.transferQueueNotice = queueMessage;
           renderJobs();
           log("Queueing transfer of " + String(selections.length) + " selected item(s).");
           const queued = await postJson("/api/transfer", {
@@ -1392,8 +1413,9 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     resolveStorageResource(transfer.bunnyApiKey, transfer.source),
     resolveStorageResource(transfer.bunnyApiKey, transfer.destination),
   ]);
+  const selections = normalizeTransferSelections(transfer.selections);
   if (transfer.previewOnly) {
-    const plan = await buildTransferPlan(source, transfer.aws, transfer.selections, transfer.sourcePrefix);
+    const plan = await buildTransferPlan(source, transfer.aws, selections, transfer.sourcePrefix);
     const preview = await detectTransferConflicts(transfer.aws, destination, plan, transfer.destinationPrefix);
     const body: TransferConflictPreview = {
       conflictCount: preview.conflicts.length,
@@ -1406,7 +1428,7 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     aws: transfer.aws,
     source,
     sourcePrefix: transfer.sourcePrefix,
-    selections: transfer.selections,
+    selections,
     destinationPrefix: transfer.destinationPrefix || "",
     destination,
     conflictMode: transfer.conflictMode || "replace",
@@ -1960,10 +1982,16 @@ async function detectTransferConflicts(
   destinationPrefix: string,
 ): Promise<TransferConflictPreview> {
   const conflicts: string[] = [];
-  for (const entry of plan) {
-    const destinationKey = joinPrefix(destinationPrefix, entry.destinationKey);
-    if (await storageObjectExists(aws, destination, destinationKey)) {
-      conflicts.push(destinationKey);
+  const batchSize = 12;
+  for (let index = 0; index < plan.length; index += batchSize) {
+    const batch = plan.slice(index, index + batchSize);
+    const results = await Promise.all(batch.map(async (entry) => {
+      const destinationKey = joinPrefix(destinationPrefix, entry.destinationKey);
+      const exists = await storageObjectExists(aws, destination, destinationKey);
+      return exists ? destinationKey : null;
+    }));
+    for (const destinationKey of results) {
+      if (destinationKey) conflicts.push(destinationKey);
     }
   }
   return {
@@ -1980,6 +2008,12 @@ function relativePathFromPrefix(prefix: string, key: string): string {
   return cleanKey.startsWith(cleanPrefix) ? cleanKey.slice(cleanPrefix.length) : cleanKey;
 }
 
+function ensureTrailingSlashPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
+}
+
 function dedupePlan(plan: TransferPlanEntry[]): TransferPlanEntry[] {
   const seen = new Set<string>();
   const result: TransferPlanEntry[] = [];
@@ -1989,6 +2023,23 @@ function dedupePlan(plan: TransferPlanEntry[]): TransferPlanEntry[] {
     result.push(entry);
   }
   return result;
+}
+
+function normalizeTransferSelections(selections: TransferSelection[]): TransferSelection[] {
+  const ordered = selections.slice().sort((left, right) => {
+    const leftKey = left.kind === "folder" ? ensureTrailingSlashPath(left.key) : left.key.replace(/\/+$/, "");
+    const rightKey = right.kind === "folder" ? ensureTrailingSlashPath(right.key) : right.key.replace(/\/+$/, "");
+    return leftKey.length - rightKey.length || leftKey.localeCompare(rightKey);
+  });
+  const kept: TransferSelection[] = [];
+  for (const selection of ordered) {
+    const key = selection.kind === "folder" ? ensureTrailingSlashPath(selection.key) : selection.key.replace(/\/+$/, "");
+    const covered = kept.some((existing) => existing.kind === "folder" && key.startsWith(ensureTrailingSlashPath(existing.key)));
+    if (!covered) {
+      kept.push({ kind: selection.kind, key });
+    }
+  }
+  return kept;
 }
 
 async function executeTransfer(
