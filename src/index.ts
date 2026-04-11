@@ -660,7 +660,6 @@ function renderHtml(): string {
             destinationProvider: els.destinationProviderSelect.value,
             destinationResource: els.destinationResourceSelect.value,
             destinationPrefix: els.destinationPrefix.value,
-            sourceSelections: Array.from(state.sourceSelections.keys()),
           }));
         } catch {
           // Local storage can be unavailable in some browser privacy modes.
@@ -678,8 +677,7 @@ function renderHtml(): string {
         els.destinationProviderSelect.value = saved.destinationProvider || (saved.bunnyZoneSelect ? "bunny" : "bunny");
         els.destinationResourceSelect.value = saved.destinationResource || saved.bunnyZoneSelect || "";
         els.destinationPrefix.value = saved.destinationPrefix || saved.bunnyPrefix || "";
-        const selections = Array.isArray(saved.sourceSelections) ? saved.sourceSelections : Array.isArray(saved.awsSelections) ? saved.awsSelections : [];
-        state.sourceSelections = new Map(selections.map((key) => [String(key), true]));
+        state.sourceSelections = new Map();
       }
 
       function setStatus(target, message, kind = "info") {
