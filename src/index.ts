@@ -319,8 +319,6 @@ function renderHtml(): string {
       <h1>S3 to Bunny without the local detour</h1>
       <p class="lede">Browse source and destination side by side, pick folders or files, and stream objects directly from AWS S3 into Bunny Storage on the server.</p>
       <div class="statusbar">
-        <span class="pill"><strong>Source</strong> AWS S3</span>
-        <span class="pill"><strong>Destination</strong> Bunny Storage</span>
         <button class="clear-credentials" id="clearCredentials" type="button">Clear credentials</button>
       </div>
     </header>
