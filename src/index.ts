@@ -709,7 +709,9 @@ function renderHtml(): string {
       function renderSideList(side) {
         const elements = sideElements(side);
         const items = sideItems(side);
-        const header = '<div class="list-head"><div></div><div>Name</div><div class="size-col">Size</div><div>Modified</div></div>';
+        const header = side === "source"
+          ? '<div class="list-head"><div><input class="check" type="checkbox" id="sourceSelectAll" title="Select all visible" /></div><div>Name</div><div class="size-col">Size</div><div>Modified</div></div>'
+          : '<div class="list-head"><div></div><div>Name</div><div class="size-col">Size</div><div>Modified</div></div>';
         if (!items.length) {
           elements.list.innerHTML = header + '<div class="list-row"><div></div><div class="meta">No objects loaded yet.</div><div></div><div></div></div>';
           return;
@@ -729,10 +731,28 @@ function renderHtml(): string {
         const more = sideContinuationToken(side) ? '<div class="list-row"><div></div><div><button class="secondary" id="loadMore' + (side === "source" ? "Source" : "Destination") + '">Load more</button></div><div></div><div></div></div>' : "";
         elements.list.innerHTML = header + rows + more;
         if (side === "source") {
+          const selectAll = $("sourceSelectAll");
+          if (selectAll) {
+            const visibleKeys = items.map((item) => item.key);
+            const allSelected = visibleKeys.length > 0 && visibleKeys.every((key) => state.sourceSelections.has(key));
+            const someSelected = visibleKeys.some((key) => state.sourceSelections.has(key));
+            selectAll.checked = allSelected;
+            selectAll.indeterminate = !allSelected && someSelected;
+            selectAll.addEventListener("change", () => {
+              const checked = selectAll.checked;
+              visibleKeys.forEach((key) => {
+                if (checked) state.sourceSelections.set(key, true);
+                else state.sourceSelections.delete(key);
+              });
+              renderSideList("source");
+              syncSummary();
+            });
+          }
           elements.list.querySelectorAll('input[type="checkbox"][data-key]').forEach((checkbox) => {
             checkbox.addEventListener("change", () => {
               if (checkbox.checked) state.sourceSelections.set(checkbox.dataset.key, true);
               else state.sourceSelections.delete(checkbox.dataset.key);
+              renderSideList("source");
               syncSummary();
             });
           });
@@ -1608,6 +1628,7 @@ async function listBunnyObjects(zone: BunnyZone, region: string, path: string): 
     .map((item) => ({
       name: String((item as Record<string, unknown>).ObjectName || item.name || ""),
       path: bunnyObjectKey(
+        zone.name,
         String((item as Record<string, unknown>).Path || item.path || ""),
         String((item as Record<string, unknown>).ObjectName || item.name || ""),
         (((item as Record<string, unknown>).IsDirectory || item.type) ? "folder" : "file") as BunnyItem["type"],
@@ -1635,12 +1656,8 @@ function bunnyPath(zoneName: string, path: string): string {
   return cleanPath ? `/${encodedZone}/${cleanPath}/` : `/${encodedZone}/`;
 }
 
-function bunnyObjectKey(path: string, name: string, type: BunnyItem["type"]): string {
-  const cleanPath = path
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .join("/");
+function bunnyObjectKey(zoneName: string, path: string, name: string, type: BunnyItem["type"]): string {
+  const cleanPath = normalizeBunnyRelativePath(zoneName, path);
   const cleanName = name
     .split("/")
     .map((segment) => segment.trim())
@@ -1649,6 +1666,24 @@ function bunnyObjectKey(path: string, name: string, type: BunnyItem["type"]): st
   const key = cleanPath && cleanName ? `${cleanPath}/${cleanName}` : cleanPath || cleanName;
   if (!key) return "";
   return type === "folder" && !key.endsWith("/") ? `${key}/` : key;
+}
+
+function normalizeBunnyRelativePath(zoneName: string, path: string): string {
+  const parts = String(path || "")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const zoneParts = String(zoneName || "")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (zoneParts.length && parts.length >= zoneParts.length) {
+    const prefix = parts.slice(0, zoneParts.length).join("/");
+    if (prefix === zoneParts.join("/")) {
+      parts.splice(0, zoneParts.length);
+    }
+  }
+  return parts.join("/");
 }
 
 async function buildTransferPlan(
