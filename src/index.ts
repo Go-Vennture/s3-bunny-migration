@@ -343,9 +343,6 @@ function renderHtml(): string {
           <span class="selection-pill" id="selectionCount">0 selected</span>
           <span class="pill" id="destinationSummary">Destination root</span>
         </div>
-          <div class="grid-2">
-            <div class="field"><label>Path behavior</label><input value="Preserve relative paths from the selected source and destination points" disabled /></div>
-          </div>
         <div class="row">
           <button class="primary" id="transferButton">Start background transfer</button>
           <button class="secondary" id="clearSelection">Clear selection</button>
@@ -626,14 +623,17 @@ function renderHtml(): string {
           return;
         }
         els.jobsList.innerHTML = header + state.jobs.map((job) => {
-          const progress = String(job.copied) + " copied / " + String(job.failed) + " failed";
+          const statusLabel = job.status === "completed" && job.failed ? "completed with warnings" : job.status;
+          const progress = job.status === "completed"
+            ? (job.failed ? String(job.copied) + " copied / " + String(job.failed) + " warning(s)" : String(job.copied) + " copied")
+            : String(job.copied) + " copied / " + String(job.failed) + " failed";
           const details = job.lastKey ? escapeHtml(job.lastKey) : escapeHtml(job.message || "");
           return '<div class="list-row">' +
             '<div>' +
               '<div><strong>' + escapeHtml(job.id.slice(0, 8)) + '</strong></div>' +
               '<div class="meta">' + escapeHtml(job.sourceBucket) + ' → ' + escapeHtml(job.destinationZone) + '</div>' +
             '</div>' +
-            '<div class="meta">' + escapeHtml(job.status) + '</div>' +
+            '<div class="meta">' + escapeHtml(statusLabel) + '</div>' +
             '<div class="meta">' + escapeHtml(progress) + '</div>' +
             '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + '</div>' +
           '</div>';
