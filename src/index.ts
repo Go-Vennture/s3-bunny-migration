@@ -301,10 +301,12 @@ function renderHtml(): string {
     .inline-note.error{color:#ff8c8c;font-weight:600}
     .check{width:16px;height:16px}
     .footer{margin-top:18px;display:grid;gap:12px}
-    .transfer-card{background:rgba(255,255,255,.84);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;display:grid;gap:14px}
+    .transfer-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;display:grid;gap:14px}
     .transfer-card h3{margin:0;font-size:18px}
     .summary{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-    .selection-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 10px;font-size:12px;background:rgba(122,162,255,.12);color:#bfd0ff;border:1px solid rgba(122,162,255,.18)}
+    .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);background:#182246;border-radius:999px;padding:9px 14px;font-size:13px;color:var(--muted)}
+    .pill strong{color:var(--text)}
+    .selection-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 10px;font-size:12px;background:rgba(122,162,255,.16);color:#bfd0ff;border:1px solid rgba(122,162,255,.24)}
     .transfer-status{margin-top:-2px}
     .job-actions{display:flex;justify-content:flex-end;margin-top:8px}
     .jobs-toolbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
