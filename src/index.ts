@@ -306,6 +306,8 @@ function renderHtml(): string {
     .selection-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 10px;font-size:12px;background:rgba(15,118,110,.08);color:var(--accent);border:1px solid rgba(15,118,110,.14)}
     .transfer-status{margin-top:-2px}
     .job-actions{display:flex;justify-content:flex-end;margin-top:8px}
+    .jobs-toolbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+    .jobs-pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .log{display:grid;gap:8px;background:rgba(255,255,255,.7);border:1px solid rgba(47,45,41,.12);border-radius:16px;padding:12px;min-height:96px;max-height:240px;overflow-y:auto;font-size:13px;color:var(--muted)}
     .jobs-list{min-height:220px}
     .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.1fr) 96px 84px 112px minmax(0,1.5fr)}
@@ -434,6 +436,13 @@ function renderHtml(): string {
       <div class="transfer-card">
         <h3>Background jobs</h3>
         <div class="inline-note">Queued jobs keep running in the Durable Object and you can watch progress here.</div>
+        <div class="jobs-toolbar">
+          <div class="inline-note" id="jobsCount">Showing 0 jobs.</div>
+          <div class="jobs-pager">
+            <button class="secondary" id="jobsPrev" type="button">Previous</button>
+            <button class="secondary" id="jobsNext" type="button">Next</button>
+          </div>
+        </div>
         <div class="list jobs-list" id="jobsList" aria-live="polite"></div>
         <div class="inline-note" id="jobsStatus"></div>
       </div>
@@ -502,6 +511,9 @@ function renderHtml(): string {
         clearSelection: $("clearSelection"),
         log: $("log"),
         jobsList: $("jobsList"),
+        jobsCount: $("jobsCount"),
+        jobsPrev: $("jobsPrev"),
+        jobsNext: $("jobsNext"),
         jobsStatus: $("jobsStatus"),
         conflictDialog: $("conflictDialog"),
         conflictDialogMessage: $("conflictDialogMessage"),
@@ -523,6 +535,9 @@ function renderHtml(): string {
         destinationItems: [],
         destinationContinuationToken: null,
         jobs: [],
+        jobsPage: 1,
+        jobsPageSize: 10,
+        jobsTotal: 0,
         transferQueueNotice: "",
       };
       let conflictDialogResolve = null;
@@ -851,6 +866,16 @@ function renderHtml(): string {
       function renderJobs() {
         const header = '<div class="list-head"><div>Job</div><div>Status</div><div>Files</div><div>Progress</div><div>Details</div></div>';
         const queueNotice = state.transferQueueNotice;
+        const totalJobs = Number.isFinite(state.jobsTotal) ? state.jobsTotal : state.jobs.length;
+        const pageSize = Number.isFinite(state.jobsPageSize) && state.jobsPageSize > 0 ? state.jobsPageSize : 10;
+        const totalPages = Math.max(1, Math.ceil((totalJobs || 0) / pageSize));
+        const currentPage = Math.min(Math.max(1, state.jobsPage || 1), totalPages);
+        state.jobsPage = currentPage;
+        els.jobsCount.textContent = totalJobs
+          ? "Showing jobs " + String((currentPage - 1) * pageSize + 1) + "-" + String(Math.min(currentPage * pageSize, totalJobs)) + " of " + String(totalJobs) + "."
+          : "No background jobs running.";
+        els.jobsPrev.disabled = currentPage <= 1;
+        els.jobsNext.disabled = currentPage >= totalPages || totalJobs === 0;
         if (!state.jobs.length) {
           els.jobsList.innerHTML = header + '<div class="list-row"><div class="meta">No jobs yet.</div><div></div><div></div><div></div><div class="meta">Start a transfer to queue one.</div></div>';
           els.jobsStatus.textContent = queueNotice || "No background jobs running.";
@@ -912,6 +937,13 @@ function renderHtml(): string {
           renderJobs();
           await refreshJobs();
         }
+      }
+
+      function changeJobsPage(delta) {
+        const pageSize = Number.isFinite(state.jobsPageSize) && state.jobsPageSize > 0 ? state.jobsPageSize : 10;
+        const totalPages = Math.max(1, Math.ceil((state.jobsTotal || 0) / pageSize));
+        state.jobsPage = Math.min(Math.max(1, (state.jobsPage || 1) + delta), totalPages);
+        void refreshJobs();
       }
 
       async function postJsonResponse(path, body) {
@@ -1085,12 +1117,18 @@ function renderHtml(): string {
 
       async function refreshJobs(cleanupFailed = false) {
         try {
-          const response = await fetch("/api/jobs" + (cleanupFailed ? "?cleanupFailed=1" : ""));
+          const query = new URLSearchParams();
+          if (cleanupFailed) query.set("cleanupFailed", "1");
+          query.set("page", String(state.jobsPage || 1));
+          const response = await fetch("/api/jobs" + (query.toString() ? "?" + query.toString() : ""));
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
             throw new Error(payload && payload.error ? payload.error : response.statusText || "Request failed");
           }
           state.jobs = payload.jobs || [];
+          state.jobsPage = Number.isFinite(payload.page) ? Number(payload.page) : state.jobsPage;
+          state.jobsPageSize = Number.isFinite(payload.pageSize) ? Number(payload.pageSize) : state.jobsPageSize;
+          state.jobsTotal = Number.isFinite(payload.totalJobs) ? Number(payload.totalJobs) : state.jobs.length;
           renderJobs();
           if (pendingDestinationRefresh) {
             const job = state.jobs.find((item) => item.id === pendingDestinationRefresh.jobId);
@@ -1198,6 +1236,7 @@ function renderHtml(): string {
             provider: selectedProvider("destination"),
             resource: destinationResource.name,
           };
+          state.jobsPage = 1;
           state.sourceSelections.clear();
           renderSideList("source");
           setStatus(els.transferStatus, "Queued job " + queued.job.id + ".");
@@ -1254,6 +1293,8 @@ function renderHtml(): string {
         clearCredentials();
         log("Credentials cleared.");
       });
+      els.jobsPrev.addEventListener("click", () => changeJobsPage(-1));
+      els.jobsNext.addEventListener("click", () => changeJobsPage(1));
       els.jobsList.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;
@@ -1491,6 +1532,7 @@ async function handleJobs(request: Request, env: AppEnv): Promise<Response> {
   if (url.searchParams.get("cleanupFailed") === "1") {
     await manager.clearFailedJobs();
   }
+  const page = Math.max(1, Number(url.searchParams.get("page") || "1") || 1);
   const jobId = url.searchParams.get("jobId");
   if (jobId) {
     const job = await manager.getJob(jobId);
@@ -1499,7 +1541,7 @@ async function handleJobs(request: Request, env: AppEnv): Promise<Response> {
     }
     return json({ job });
   }
-  return json({ jobs: await manager.listJobs() });
+  return json(await manager.listJobs(page));
 }
 
 async function handleJobCancel(request: Request, env: AppEnv): Promise<Response> {
@@ -2552,11 +2594,18 @@ export class TransferManager extends DurableObject<Env> {
     return job;
   }
 
-  async listJobs(): Promise<TransferJobSummary[]> {
-    return this.ctx.storage.sql
-      .exec<TransferJobRow>(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50`)
+  async listJobs(page = 1, pageSize = 10): Promise<{ jobs: TransferJobSummary[]; page: number; pageSize: number; totalJobs: number; totalPages: number }> {
+    const normalizedPageSize = Math.max(1, Math.min(10, Math.floor(pageSize) || 10));
+    const totalResult = this.ctx.storage.sql.exec<{ total: number }>(`SELECT COUNT(*) AS total FROM jobs`);
+    const totalJobs = Number(totalResult.toArray()[0]?.total || 0);
+    const totalPages = Math.max(1, Math.ceil(totalJobs / normalizedPageSize));
+    const normalizedPage = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
+    const offset = (normalizedPage - 1) * normalizedPageSize;
+    const jobs = this.ctx.storage.sql
+      .exec<TransferJobRow>(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?`, normalizedPageSize, offset)
       .toArray()
       .map((row) => this.rowToSummary(row));
+    return { jobs, page: normalizedPage, pageSize: normalizedPageSize, totalJobs, totalPages };
   }
 
   async clearFailedJobs(): Promise<void> {
