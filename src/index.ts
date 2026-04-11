@@ -512,6 +512,7 @@ function renderHtml(): string {
         jobs: [],
       };
       let conflictDialogResolve = null;
+      let uiPersistenceEnabled = false;
 
       function escapeHtml(value) {
         return String(value)
@@ -644,6 +645,9 @@ function renderHtml(): string {
       }
 
       function writeUiState() {
+        if (!uiPersistenceEnabled) {
+          return;
+        }
         try {
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
             expiresAt: Date.now() + STORAGE_TTL_MS,
@@ -676,7 +680,6 @@ function renderHtml(): string {
         els.destinationPrefix.value = saved.destinationPrefix || saved.bunnyPrefix || "";
         const selections = Array.isArray(saved.sourceSelections) ? saved.sourceSelections : Array.isArray(saved.awsSelections) ? saved.awsSelections : [];
         state.sourceSelections = new Map(selections.map((key) => [String(key), true]));
-        writeUiState();
       }
 
       function setStatus(target, message, kind = "info") {
@@ -1117,13 +1120,14 @@ function renderHtml(): string {
       }
 
       restoreUiState();
+      const startupLoads = [];
       if (els.awsAccessKeyId.value.trim() && els.awsSecretAccessKey.value.trim()) {
-        if (selectedProvider("source") === "aws") void loadResources("source");
-        if (selectedProvider("destination") === "aws") void loadResources("destination");
+        if (selectedProvider("source") === "aws") startupLoads.push(loadResources("source"));
+        if (selectedProvider("destination") === "aws") startupLoads.push(loadResources("destination"));
       }
       if (els.bunnyApiKey.value.trim()) {
-        if (selectedProvider("source") === "bunny") void loadResources("source");
-        if (selectedProvider("destination") === "bunny") void loadResources("destination");
+        if (selectedProvider("source") === "bunny") startupLoads.push(loadResources("source"));
+        if (selectedProvider("destination") === "bunny") startupLoads.push(loadResources("destination"));
       }
 
       [
@@ -1260,7 +1264,10 @@ function renderHtml(): string {
       renderSideList("destination");
       renderJobs();
       syncSummary();
-      writeUiState();
+      void Promise.allSettled(startupLoads).then(() => {
+        uiPersistenceEnabled = true;
+        writeUiState();
+      });
       void refreshJobs(true);
       setInterval(() => {
         void refreshJobs();
