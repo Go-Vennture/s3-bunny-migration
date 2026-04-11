@@ -428,9 +428,9 @@ function renderHtml(): string {
       <p id="conflictDialogMessage"></p>
       <div class="dialog-list" id="conflictDialogList"></div>
       <div class="dialog-actions">
-        <button class="secondary" id="conflictReplace">Replace existing</button>
-        <button class="secondary" id="conflictNew">Copy only new</button>
-        <button class="ghost" id="conflictCancel">Cancel</button>
+        <button type="button" class="secondary" id="conflictReplace">Replace existing</button>
+        <button type="button" class="secondary" id="conflictNew">Copy only new</button>
+        <button type="button" class="ghost" id="conflictCancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -505,6 +505,7 @@ function renderHtml(): string {
         destinationContinuationToken: null,
         jobs: [],
       };
+      let conflictDialogResolve: ((value: ConflictMode | null) => void) | null = null;
 
       function escapeHtml(value) {
         return String(value)
@@ -866,41 +867,29 @@ function renderHtml(): string {
         return visible.map((item) => "<div>" + escapeHtml(item) + "</div>").join("") + overflow;
       }
 
+      function closeConflictDialog(value) {
+        if (!els.conflictDialog || !els.conflictDialogMessage || !els.conflictDialogList) return;
+        els.conflictDialog.hidden = true;
+        document.body.style.overflow = "";
+        const resolve = conflictDialogResolve;
+        conflictDialogResolve = null;
+        if (resolve) resolve(value);
+      }
+
       function askTransferConflict(conflicts, total) {
         return new Promise((resolve) => {
           if (!els.conflictDialog || !els.conflictDialogMessage || !els.conflictDialogList) {
             resolve("replace");
             return;
           }
-          const cleanup = () => {
-            els.conflictDialog.hidden = true;
-            document.removeEventListener("keydown", onKeyDown);
-            els.conflictReplace.removeEventListener("click", onReplace);
-            els.conflictNew.removeEventListener("click", onNewOnly);
-            els.conflictCancel.removeEventListener("click", onCancel);
-            document.body.style.overflow = "";
-          };
-          const finish = (value) => {
-            cleanup();
-            resolve(value);
-          };
-          const onReplace = () => finish("replace");
-          const onNewOnly = () => finish("new");
-          const onCancel = () => finish(null);
-          const onKeyDown = (event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              finish(null);
-            }
-          };
+          if (conflictDialogResolve) {
+            conflictDialogResolve(null);
+          }
+          conflictDialogResolve = resolve;
           els.conflictDialogMessage.textContent = String(total) + " matching file" + (total === 1 ? "" : "s") + " already exist in the destination. Choose how to continue.";
           els.conflictDialogList.innerHTML = renderConflictList(conflicts, total);
           els.conflictDialog.hidden = false;
           document.body.style.overflow = "hidden";
-          document.addEventListener("keydown", onKeyDown);
-          els.conflictReplace.addEventListener("click", onReplace);
-          els.conflictNew.addEventListener("click", onNewOnly);
-          els.conflictCancel.addEventListener("click", onCancel);
         });
       }
 
@@ -1134,6 +1123,15 @@ function renderHtml(): string {
       els.loadDestinationResources.addEventListener("click", () => loadResources("destination"));
       els.loadDestinationPath.addEventListener("click", () => loadPath("destination", false));
       els.transferButton.addEventListener("click", startTransfer);
+      els.conflictReplace.addEventListener("click", () => closeConflictDialog("replace"));
+      els.conflictNew.addEventListener("click", () => closeConflictDialog("new"));
+      els.conflictCancel.addEventListener("click", () => closeConflictDialog(null));
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && els.conflictDialog && !els.conflictDialog.hidden) {
+          event.preventDefault();
+          closeConflictDialog(null);
+        }
+      });
       els.clearSelection.addEventListener("click", () => {
         state.sourceSelections.clear();
         renderSideList("source");
