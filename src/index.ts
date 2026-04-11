@@ -1201,26 +1201,32 @@ function renderHtml(): string {
         state.sourceSelections.clear();
         state.sourceItems = [];
         state.sourceContinuationToken = null;
+        els.sourcePrefix.value = "";
         populateResourceSelect("source", selectedProvider("source") === "aws" ? state.awsBuckets : state.bunnyZones);
         renderSideList("source");
         syncSummary();
+        writeUiState();
         void loadResources("source");
       });
       els.destinationProviderSelect.addEventListener("change", () => {
         state.destinationItems = [];
         state.destinationContinuationToken = null;
+        els.destinationPrefix.value = "";
         populateResourceSelect("destination", selectedProvider("destination") === "aws" ? state.awsBuckets : state.bunnyZones);
         renderSideList("destination");
         syncSummary();
+        writeUiState();
         void loadResources("destination");
       });
       els.sourceResourceSelect.addEventListener("change", () => {
         state.sourceSelections.clear();
+        els.sourcePrefix.value = "";
         syncSummary();
         writeUiState();
         void loadPath("source", false);
       });
       els.destinationResourceSelect.addEventListener("change", () => {
+        els.destinationPrefix.value = "";
         syncSummary();
         writeUiState();
         void loadPath("destination", false);
