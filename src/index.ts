@@ -86,6 +86,8 @@ type TransferConflictPreview = {
   conflicts: string[];
 };
 
+const SAFE_COPY_CONCURRENCY = 4;
+
 type ResolvedBunnyZone = BunnyZone & {
   password: string;
 };
@@ -211,6 +213,7 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/bunny/zones") return await handleBunnyZones(request);
       if (request.method === "POST" && url.pathname === "/api/bunny/list") return await handleBunnyList(request);
       if (request.method === "POST" && url.pathname === "/api/transfer") return await handleTransfer(request, env);
+      if (request.method === "POST" && url.pathname === "/api/jobs/cancel") return await handleJobCancel(request, env);
       if (request.method === "GET" && url.pathname === "/api/jobs") return await handleJobs(request, env);
       return new Response("Not found", { status: 404 });
     } catch (error) {
@@ -297,6 +300,7 @@ function renderHtml(): string {
     .summary{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
     .selection-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 10px;font-size:12px;background:rgba(15,118,110,.08);color:var(--accent);border:1px solid rgba(15,118,110,.14)}
     .transfer-status{margin-top:-2px}
+    .job-actions{display:flex;justify-content:flex-end;margin-top:8px}
     .log{display:grid;gap:8px;background:rgba(255,255,255,.7);border:1px solid rgba(47,45,41,.12);border-radius:16px;padding:12px;min-height:96px;max-height:240px;overflow-y:auto;font-size:13px;color:var(--muted)}
     .jobs-list{min-height:220px}
     .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.2fr) 100px 120px minmax(0,1.6fr)}
@@ -849,6 +853,7 @@ function renderHtml(): string {
         }
         els.jobsList.innerHTML = header + state.jobs.map((job) => {
           const statusLabel = job.status === "completed" && job.failed ? "completed with warnings" : job.status;
+          const isActive = job.status === "queued" || job.status === "running";
           const progressParts = [];
           if (job.copied) progressParts.push(String(job.copied) + " copied");
           if (job.skipped) progressParts.push(String(job.skipped) + " skipped");
@@ -858,6 +863,7 @@ function renderHtml(): string {
             : (progressParts.length ? progressParts.join(" / ") : "Running");
           const details = job.lastKey ? escapeHtml(job.lastKey) : escapeHtml(job.message || "");
           const route = providerLabel(job.sourceProvider) + " " + escapeHtml(job.sourceResource) + " -> " + providerLabel(job.destinationProvider) + " " + escapeHtml(job.destinationResource);
+          const actionButton = isActive ? '<div class="job-actions"><button type="button" class="ghost mini" data-job-cancel="' + escapeHtml(job.id) + '">Cancel</button></div>' : "";
           return '<div class="list-row">' +
             '<div>' +
               '<div><strong>' + escapeHtml(job.id.slice(0, 8)) + '</strong></div>' +
@@ -865,7 +871,7 @@ function renderHtml(): string {
             '</div>' +
             '<div class="meta">' + escapeHtml(statusLabel) + '</div>' +
             '<div class="meta">' + escapeHtml(progress) + '</div>' +
-            '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + '</div>' +
+            '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + actionButton + '</div>' +
           '</div>';
         }).join("");
         const running = state.jobs.find((job) => job.status === "running" || job.status === "queued");
@@ -887,6 +893,18 @@ function renderHtml(): string {
           }
         }
         return kept;
+      }
+
+      async function cancelJob(jobId) {
+        const payload = await postJson("/api/jobs/cancel", { jobId });
+        if (payload && payload.job) {
+          const index = state.jobs.findIndex((job) => job.id === payload.job.id);
+          if (index >= 0) {
+            state.jobs[index] = payload.job;
+          }
+          renderJobs();
+          await refreshJobs();
+        }
       }
 
       async function postJsonResponse(path, body) {
@@ -1071,7 +1089,8 @@ function renderHtml(): string {
             const job = state.jobs.find((item) => item.id === pendingDestinationRefresh.jobId);
             const completed = job && job.status === "completed";
             const failed = job && job.status === "failed";
-            if (completed || failed) {
+            const cancelled = job && job.status === "cancelled";
+            if (completed || failed || cancelled) {
               const matchesDestination = selectedProvider("destination") === pendingDestinationRefresh.provider &&
                 selectedResource("destination") &&
                 selectedResource("destination").name === pendingDestinationRefresh.resource;
@@ -1225,6 +1244,18 @@ function renderHtml(): string {
       els.clearCredentials.addEventListener("click", () => {
         clearCredentials();
         log("Credentials cleared.");
+      });
+      els.jobsList.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const button = target.closest("[data-job-cancel]");
+        if (!(button instanceof HTMLElement)) return;
+        const jobId = button.getAttribute("data-job-cancel");
+        if (!jobId) return;
+        button.setAttribute("disabled", "disabled");
+        void cancelJob(jobId).catch((error) => {
+          log(errorMessage(error), "error");
+        });
       });
       els.conflictReplace.addEventListener("click", () => closeConflictDialog("replace"));
       els.conflictNew.addEventListener("click", () => closeConflictDialog("new"));
@@ -1458,6 +1489,21 @@ async function handleJobs(request: Request, env: AppEnv): Promise<Response> {
     return json({ job });
   }
   return json({ jobs: await manager.listJobs() });
+}
+
+async function handleJobCancel(request: Request, env: AppEnv): Promise<Response> {
+  const body = await parseJson(request);
+  const obj = body as Record<string, unknown>;
+  const jobId = typeof obj.jobId === "string" ? obj.jobId.trim() : "";
+  if (!jobId) {
+    throw new Error("Missing jobId.");
+  }
+  const manager = getTransferManagerStub(env);
+  const job = await manager.cancelJob(jobId);
+  if (!job) {
+    return json({ error: "Job not found" }, { status: 404 });
+  }
+  return json({ job });
 }
 
 function getTransferManagerStub(env: AppEnv): DurableObjectStub<TransferManager> {
@@ -2504,6 +2550,26 @@ export class TransferManager extends DurableObject<Env> {
     this.ctx.storage.sql.exec(`DELETE FROM jobs WHERE status = 'failed'`);
   }
 
+  async cancelJob(jobId: string): Promise<TransferJobDetail | null> {
+    const job = this.getJobRow(jobId);
+    if (!job) {
+      return null;
+    }
+    if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+      return this.rowToDetail(job);
+    }
+    this.updateJob(jobId, {
+      status: "cancelled",
+      message: "Cancelled",
+      current_folder_prefix: null,
+      current_folder_page_json: null,
+      current_folder_continuation_token: null,
+    });
+    this.logEvent(jobId, "info", "Job cancelled");
+    const refreshed = this.getJobRow(jobId);
+    return refreshed ? this.rowToDetail(refreshed) : null;
+  }
+
   async getJob(jobId: string): Promise<TransferJobDetail | null> {
     const cursor = this.ctx.storage.sql.exec<TransferJobRow>(`SELECT * FROM jobs WHERE id = ? LIMIT 1`, jobId);
     const row = cursor.toArray()[0];
@@ -2593,47 +2659,60 @@ export class TransferManager extends DurableObject<Env> {
     const conflictMode = job.conflict_mode === "new" ? "new" : "replace";
 
     if (selection.kind === "file") {
-      try {
-        const outcome = await copyStorageObject(
-          aws,
-          source,
-          destination,
-          selection.key,
-          job.destination_prefix,
-          relativePathFromPrefix(job.source_prefix, selection.key),
-          conflictMode,
-        );
-        const patch: Partial<TransferJobRow> = {
-          processed: job.processed + 1,
-          current_selection_index: job.current_selection_index + 1,
-          last_key: selection.key,
-          last_error: null,
-          current_folder_prefix: null,
-          current_folder_page_json: null,
-          current_folder_continuation_token: null,
-        };
-        if (outcome === "skipped") {
-          patch.skipped = job.skipped + 1;
-          patch.message = `Skipped ${selection.key}`;
-        } else {
-          patch.copied = job.copied + 1;
-          patch.message = `Copied ${job.copied + 1} file(s)`;
+      const fileBatch = [selection];
+      let cursor = job.current_selection_index + 1;
+      while (cursor < selections.length && fileBatch.length < SAFE_COPY_CONCURRENCY) {
+        const nextSelection = selections[cursor];
+        if (!nextSelection || nextSelection.kind !== "file") {
+          break;
         }
-        this.updateJob(job.id, patch);
-      } catch (error) {
-        this.handleStepFailure(job, selection.key, error);
-        this.updateJob(job.id, {
-          failed: job.failed + 1,
-          processed: job.processed + 1,
-          current_selection_index: job.current_selection_index + 1,
-          last_key: selection.key,
-          last_error: (error as Error).message,
-          message: `Failed on ${selection.key}`,
-          current_folder_prefix: null,
-          current_folder_page_json: null,
-          current_folder_continuation_token: null,
-        });
+        fileBatch.push(nextSelection);
+        cursor += 1;
       }
+      const results = await Promise.allSettled(fileBatch.map((entry) => copyStorageObject(
+        aws,
+        source,
+        destination,
+        entry.key,
+        job.destination_prefix,
+        relativePathFromPrefix(job.source_prefix, entry.key),
+        conflictMode,
+      )));
+      let copiedDelta = 0;
+      let skippedDelta = 0;
+      let failedDelta = 0;
+      let lastError: string | null = null;
+      fileBatch.forEach((entry, index) => {
+        const result = results[index];
+        if (result.status === "fulfilled") {
+          if (result.value === "skipped") {
+            skippedDelta += 1;
+          } else {
+            copiedDelta += 1;
+          }
+          return;
+        }
+        failedDelta += 1;
+        lastError = (result.reason as Error).message;
+        this.handleStepFailure(job, entry.key, result.reason);
+      });
+      const messageParts = [];
+      if (copiedDelta) messageParts.push(`${copiedDelta} copied`);
+      if (skippedDelta) messageParts.push(`${skippedDelta} skipped`);
+      if (failedDelta) messageParts.push(`${failedDelta} failed`);
+      this.updateJob(job.id, {
+        copied: job.copied + copiedDelta,
+        skipped: job.skipped + skippedDelta,
+        failed: job.failed + failedDelta,
+        processed: job.processed + fileBatch.length,
+        current_selection_index: job.current_selection_index + fileBatch.length,
+        last_key: fileBatch[fileBatch.length - 1].key,
+        last_error: lastError,
+        current_folder_prefix: null,
+        current_folder_page_json: null,
+        current_folder_continuation_token: null,
+        message: messageParts.length ? messageParts.join(" / ") : `Processed ${fileBatch.length} file(s)`,
+      });
       return "continue";
     }
 
@@ -2700,8 +2779,8 @@ export class TransferManager extends DurableObject<Env> {
       }
     }
 
-    const key = page.keys[page.index];
-    if (!key) {
+    const batchKeys = page.keys.slice(page.index, page.index + SAFE_COPY_CONCURRENCY);
+    if (!batchKeys.length) {
       if (page.continuationToken) {
         this.updateJob(job.id, {
           current_folder_page_json: null,
@@ -2720,64 +2799,58 @@ export class TransferManager extends DurableObject<Env> {
       return "continue";
     }
 
-    try {
-      const outcome = await copyStorageObject(
-        aws,
-        source,
-        destination,
-        key,
-        job.destination_prefix,
-        relativePathFromPrefix(job.source_prefix, key),
-        conflictMode,
-      );
-      page.index += 1;
-      const isPageDone = page.index >= page.keys.length;
-      const patch: Partial<TransferJobRow> = {
-        processed: job.processed + 1,
-        last_key: key,
-        last_error: null,
-        current_folder_page_json: isPageDone ? null : JSON.stringify(page),
-        current_folder_continuation_token: isPageDone ? page.continuationToken || null : job.current_folder_continuation_token,
-        current_selection_index: isPageDone && !page.continuationToken ? job.current_selection_index + 1 : job.current_selection_index,
-      };
-      if (outcome === "skipped") {
-        patch.skipped = job.skipped + 1;
-        patch.message = `Skipped ${key}`;
-      } else {
-        patch.copied = job.copied + 1;
-        patch.message = `Copied ${key}`;
+    const results = await Promise.allSettled(batchKeys.map((key) => copyStorageObject(
+      aws,
+      source,
+      destination,
+      key,
+      job.destination_prefix,
+      relativePathFromPrefix(job.source_prefix, key),
+      conflictMode,
+    )));
+    let copiedDelta = 0;
+    let skippedDelta = 0;
+    let failedDelta = 0;
+    let lastError: string | null = null;
+    batchKeys.forEach((key, index) => {
+      const result = results[index];
+      if (result.status === "fulfilled") {
+        if (result.value === "skipped") {
+          skippedDelta += 1;
+        } else {
+          copiedDelta += 1;
+        }
+        return;
       }
-      this.updateJob(job.id, patch);
-      if (isPageDone && !page.continuationToken) {
-        this.updateJob(job.id, {
-          current_folder_prefix: null,
-          current_folder_page_json: null,
-          current_folder_continuation_token: null,
-          current_selection_index: job.current_selection_index + 1,
-        });
-      }
-    } catch (error) {
-      this.handleStepFailure(job, key, error);
-      page.index += 1;
-      const isPageDone = page.index >= page.keys.length;
+      failedDelta += 1;
+      lastError = (result.reason as Error).message;
+      this.handleStepFailure(job, key, result.reason);
+    });
+    page.index += batchKeys.length;
+    const isPageDone = page.index >= page.keys.length;
+    const messageParts = [];
+    if (copiedDelta) messageParts.push(`${copiedDelta} copied`);
+    if (skippedDelta) messageParts.push(`${skippedDelta} skipped`);
+    if (failedDelta) messageParts.push(`${failedDelta} failed`);
+    this.updateJob(job.id, {
+      copied: job.copied + copiedDelta,
+      skipped: job.skipped + skippedDelta,
+      failed: job.failed + failedDelta,
+      processed: job.processed + batchKeys.length,
+      last_key: batchKeys[batchKeys.length - 1],
+      last_error: lastError,
+      current_folder_page_json: isPageDone ? null : JSON.stringify(page),
+      current_folder_continuation_token: isPageDone ? page.continuationToken || null : job.current_folder_continuation_token,
+      current_selection_index: isPageDone && !page.continuationToken ? job.current_selection_index + 1 : job.current_selection_index,
+      message: messageParts.length ? messageParts.join(" / ") : `Processed ${batchKeys.length} file(s)`,
+    });
+    if (isPageDone && !page.continuationToken) {
       this.updateJob(job.id, {
-        failed: job.failed + 1,
-        processed: job.processed + 1,
-        last_key: key,
-        last_error: (error as Error).message,
-        message: `Failed on ${key}`,
-        current_folder_page_json: isPageDone ? null : JSON.stringify(page),
-        current_folder_continuation_token: isPageDone ? page.continuationToken || null : job.current_folder_continuation_token,
-        current_selection_index: isPageDone && !page.continuationToken ? job.current_selection_index + 1 : job.current_selection_index,
+        current_folder_prefix: null,
+        current_folder_page_json: null,
+        current_folder_continuation_token: null,
+        current_selection_index: job.current_selection_index + 1,
       });
-      if (isPageDone && !page.continuationToken) {
-        this.updateJob(job.id, {
-          current_folder_prefix: null,
-          current_folder_page_json: null,
-          current_folder_continuation_token: null,
-          current_selection_index: job.current_selection_index + 1,
-        });
-      }
     }
 
     return "continue";

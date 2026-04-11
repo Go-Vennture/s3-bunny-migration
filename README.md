@@ -7,9 +7,11 @@ Cloudflare Worker app for copying files and folders between Amazon S3 buckets an
 - Browses a source and destination side by side.
 - Supports `aws -> aws`, `bunny -> bunny`, `aws -> bunny`, and `bunny -> aws`.
 - Copies files in the background through a Durable Object job runner.
+- Uses a small safe-mode concurrency window so large jobs move faster without going fully wide open.
 - Streams object data directly from source to destination.
 - Expands folders recursively, so selecting a folder copies everything underneath it.
 - Prompts when the destination already contains matching files.
+- Lets you cancel queued or running jobs from the background jobs list.
 - Remembers your last provider, resource, and path selection for convenience.
 
 ## Installation
@@ -57,6 +59,7 @@ When you start a transfer:
 4. Folder selections are expanded recursively, so copying a folder includes every file and subfolder underneath it.
 5. If the destination already contains matching items, the app asks whether to replace them, copy only new items, or cancel.
 6. When the job completes, the destination view refreshes automatically so you can see the new files.
+7. You can cancel a queued or running job from the background jobs list if you need to stop early.
 
 ## Credentials
 
