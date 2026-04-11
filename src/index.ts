@@ -240,7 +240,7 @@ function renderHtml(): string {
     :root{
       color-scheme: light;
       --bg:#f4f1ea; --bg2:#ece6dc; --panel:rgba(255,255,255,.86); --border:rgba(47,45,41,.12);
-      --text:#1f1b16; --muted:#6f665b; --accent:#0f766e; --accent2:#b45309; --shadow:0 18px 45px rgba(34,29,24,.12);
+      --text:#1f1b16; --muted:#6f665b; --accent:#0f766e; --accent2:#b45309; --ok:#48d597; --warn:#ffcc66; --danger:#ff6b6b; --cancel:#ffb347; --shadow:0 18px 45px rgba(34,29,24,.12);
       --radius:20px;
       font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
     }
@@ -310,7 +310,21 @@ function renderHtml(): string {
     .jobs-pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .log{display:grid;gap:8px;background:rgba(255,255,255,.7);border:1px solid rgba(47,45,41,.12);border-radius:16px;padding:12px;min-height:96px;max-height:240px;overflow-y:auto;font-size:13px;color:var(--muted)}
     .jobs-list{min-height:220px}
-    .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.1fr) 96px 84px 112px minmax(0,1.5fr)}
+    .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.1fr) minmax(140px,.92fr) 80px 120px minmax(0,1.5fr)}
+    .jobs-list .list-row{transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+    .jobs-list .list-row.job-row{align-items:start}
+    .jobs-list .list-row.job-row strong{color:var(--text)}
+    .jobs-list .list-row.job-row .meta{color:#5f665d}
+    .jobs-list .list-row.job-row:hover{background:rgba(15,118,110,.06)}
+    .jobs-list .list-row.job-row--completed{background:rgba(72,213,151,.10);box-shadow:inset 4px 0 0 rgba(72,213,151,.42)}
+    .jobs-list .list-row.job-row--processing{background:rgba(255,204,102,.14);box-shadow:inset 4px 0 0 rgba(255,204,102,.54)}
+    .jobs-list .list-row.job-row--failed{background:rgba(255,107,107,.11);box-shadow:inset 4px 0 0 rgba(255,107,107,.46)}
+    .jobs-list .list-row.job-row--cancelled{background:rgba(255,179,71,.12);box-shadow:inset 4px 0 0 rgba(255,179,71,.50)}
+    .job-status-chip{display:inline-flex;align-items:center;max-width:100%;padding:4px 9px;border-radius:999px;border:1px solid transparent;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .job-status-chip--completed{background:rgba(72,213,151,.15);color:#1c7e56;border-color:rgba(72,213,151,.22)}
+    .job-status-chip--processing{background:rgba(255,204,102,.18);color:#8a5a00;border-color:rgba(255,204,102,.28)}
+    .job-status-chip--failed{background:rgba(255,107,107,.15);color:#b42318;border-color:rgba(255,107,107,.24)}
+    .job-status-chip--cancelled{background:rgba(255,179,71,.16);color:#a85d00;border-color:rgba(255,179,71,.24)}
     .error{color:#b42318}
     .dialog-backdrop[hidden]{display:none !important}
     .dialog-backdrop{position:fixed;inset:0;background:rgba(28,24,20,.48);backdrop-filter:blur(10px);display:grid;place-items:center;padding:20px;z-index:9999;pointer-events:auto}
@@ -882,6 +896,13 @@ function renderHtml(): string {
           return;
         }
         els.jobsList.innerHTML = header + state.jobs.map((job) => {
+          const tone = job.status === "completed"
+            ? "completed"
+            : job.status === "failed"
+              ? "failed"
+              : job.status === "cancelled"
+                ? "cancelled"
+                : "processing";
           const statusLabel = job.status === "completed" && job.failed ? "completed with warnings" : job.status;
           const isActive = job.status === "queued" || job.status === "running";
           const filesLabel = Number.isFinite(job.totalFiles) && job.totalFiles > 0 ? String(job.totalFiles) : "—";
@@ -895,12 +916,13 @@ function renderHtml(): string {
           const details = job.lastKey ? escapeHtml(job.lastKey) : escapeHtml(job.message || "");
           const route = providerLabel(job.sourceProvider) + " " + escapeHtml(job.sourceResource) + " -> " + providerLabel(job.destinationProvider) + " " + escapeHtml(job.destinationResource);
           const actionButton = isActive ? '<div class="job-actions"><button type="button" class="ghost mini" data-job-cancel="' + escapeHtml(job.id) + '">Cancel</button></div>' : "";
-          return '<div class="list-row">' +
+          const statusChip = '<span class="job-status-chip job-status-chip--' + tone + '">' + escapeHtml(statusLabel) + '</span>';
+          return '<div class="list-row job-row job-row--' + tone + '">' +
             '<div>' +
               '<div><strong>' + escapeHtml(job.id.slice(0, 8)) + '</strong></div>' +
               '<div class="meta">' + route + '</div>' +
             '</div>' +
-            '<div class="meta">' + escapeHtml(statusLabel) + '</div>' +
+            '<div class="meta">' + statusChip + '</div>' +
             '<div class="meta">' + escapeHtml(filesLabel) + '</div>' +
             '<div class="meta">' + escapeHtml(progress) + '</div>' +
             '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + actionButton + '</div>' +
