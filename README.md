@@ -1,56 +1,100 @@
 # S3 to Bunny Migration
 
-Lightweight Cloudflare Worker app for migrating content from Amazon S3 buckets to Bunny Storage zones without downloading files locally.
+Cloudflare Worker app for copying files and folders between Amazon S3 buckets and Bunny Storage zones without downloading the data locally first.
 
-## What it does
+## What It Does
 
-- Lists S3 buckets from a single AWS access key.
-- Lists Bunny storage zones from a Bunny account API key.
-- Browses folders on both sides in a two-column file-manager layout.
-- Queues background transfer jobs for large migrations and tracks progress in the UI.
-- Copies selected files and folders directly from S3 to Bunny using server-side streaming.
-- Preserves full source paths by default so folder trees move as folders, not flattened files.
+- Browses a source and destination side by side.
+- Supports `aws -> aws`, `bunny -> bunny`, `aws -> bunny`, and `bunny -> aws`.
+- Copies files in the background through a Durable Object job runner.
+- Streams object data directly from source to destination.
+- Expands folders recursively, so selecting a folder copies everything underneath it.
+- Prompts when the destination already contains matching files.
+- Remembers your last provider, resource, and path selection for convenience.
 
-## Bunny auth note
+## Installation
 
-Bunny has two different credential types:
-
-- The Bunny account API key is the admin-style key used to list storage zones.
-- The Bunny storage zone password is what the Storage HTTP API uses for file reads and writes.
-
-This app uses the Bunny account API key to discover zones and resolve the correct storage password server-side.
-
-## Large transfers
-
-For migrations with 10,000+ files, the copy runs as a durable background job rather than a single request. The job runner checkpoints progress in a Durable Object and resumes automatically until the transfer finishes.
-
-## Local setup
-
-1. Install dependencies:
+1. Install dependencies.
 
 ```bash
 npm install
 ```
 
-2. Start the Worker locally:
+2. Start the Worker locally.
 
 ```bash
 npm run dev
 ```
 
-3. Open the local URL Wrangler prints and enter:
+3. Open the local URL Wrangler prints in your browser.
 
-- AWS access key ID
-- AWS secret access key
-- Bunny account API key
+4. Enter the credentials for the providers you want to use.
+
+5. Choose a source provider, source resource, destination provider, and destination resource, then browse to the folders or files you want to copy.
 
 ## Deployment
+
+Deploy directly with Wrangler:
 
 ```bash
 npm run deploy
 ```
 
+If your repository is wired to deploy from `main`, pushing to `main` will also publish the latest version to Cloudflare.
+
+## How It Works
+
+The app has two layers:
+
+- The browser UI handles credentials, resource browsing, selection, and transfer requests.
+- The Cloudflare Worker lists buckets and zones, resolves destination storage access, creates background jobs, and streams the files.
+
+When you start a transfer:
+
+1. The UI sends the selected source and destination details to the Worker.
+2. The Worker creates a Durable Object job so the copy can continue in the background.
+3. The job runner processes work in batches, which keeps large transfers from depending on a single request.
+4. Folder selections are expanded recursively, so copying a folder includes every file and subfolder underneath it.
+5. If the destination already contains matching items, the app asks whether to replace them, copy only new items, or cancel.
+6. When the job completes, the destination view refreshes automatically so you can see the new files.
+
+## Credentials
+
+Credentials are stored only in the browser, using `localStorage`.
+
+Saved values include:
+
+- AWS access key ID
+- AWS secret access key
+- Bunny account API key
+- Selected source provider
+- Selected destination provider
+- Selected source resource
+- Selected destination resource
+- Current source path
+- Current destination path
+
+The app does not persist file selections across page refreshes.
+
+Storage details:
+
+- Saved browser data has a 24-hour TTL.
+- The Worker does not store your browser credentials server-side.
+- Bunny storage zone passwords are resolved on the server from the Bunny account API key when the app needs to list or copy files.
+
+Use the `Clear credentials` button in the UI if you want to remove the saved AWS and Bunny credential fields from the browser. That keeps your browsing context available while wiping the stored secrets.
+
+## Bunny Auth Notes
+
+Bunny uses two credential layers:
+
+- The Bunny account API key is used to list storage zones and resolve the storage password.
+- The Bunny storage zone password is what the Bunny Storage API uses for file reads and writes.
+
+This app uses the Bunny account API key to discover zones and resolve the correct storage password automatically.
+
 ## Notes
 
-- The first version is intentionally lightweight and keeps secrets in the browser session only while you are using the page.
-- If you want, the next step can add job persistence, resumable transfers, or a queue-backed background copier for very large migrations.
+- File transfers are streamed directly by the Worker.
+- Background jobs run in small batches, so large selections can keep making progress without blocking the browser.
+- Changing a resource resets that side to the root of the selected bucket or zone.

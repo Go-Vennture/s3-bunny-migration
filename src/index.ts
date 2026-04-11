@@ -254,6 +254,7 @@ function renderHtml(): string {
     .panel-head p{margin:0;font-size:13px;line-height:1.45;color:var(--muted)}
     .panel-body{padding:16px 18px 18px;display:grid;gap:12px}
     .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .credential-actions{display:flex;justify-content:flex-end;margin-top:4px}
     .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
     .field{display:grid;gap:6px;flex:1 1 240px}
     .wide-field{flex:1 1 100%;min-width:0}
@@ -344,6 +345,9 @@ function renderHtml(): string {
         </div>
         <div class="panel-body">
           <div class="field"><label for="bunnyApiKey">Bunny account API key</label><input id="bunnyApiKey" type="password" autocomplete="off" spellcheck="false" /></div>
+          <div class="credential-actions">
+            <button class="ghost" id="clearCredentials" type="button">Clear credentials</button>
+          </div>
         </div>
       </article>
     </section>
@@ -467,6 +471,7 @@ function renderHtml(): string {
         awsAccessKeyId: $("awsAccessKeyId"),
         awsSecretAccessKey: $("awsSecretAccessKey"),
         bunnyApiKey: $("bunnyApiKey"),
+        clearCredentials: $("clearCredentials"),
         sourceProviderSelect: $("sourceProviderSelect"),
         sourceResourceSelect: $("sourceResourceSelect"),
         sourcePrefix: $("sourcePrefix"),
@@ -665,6 +670,18 @@ function renderHtml(): string {
         } catch {
           // Local storage can be unavailable in some browser privacy modes.
         }
+      }
+
+      function clearCredentials() {
+        els.awsAccessKeyId.value = "";
+        els.awsSecretAccessKey.value = "";
+        els.bunnyApiKey.value = "";
+        try {
+          window.localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          // Ignore storage failures when the browser blocks persistence.
+        }
+        writeUiState();
       }
 
       function restoreUiState() {
@@ -1171,6 +1188,10 @@ function renderHtml(): string {
       els.loadDestinationResources.addEventListener("click", () => loadResources("destination"));
       els.loadDestinationPath.addEventListener("click", () => loadPath("destination", false));
       els.transferButton.addEventListener("click", startTransfer);
+      els.clearCredentials.addEventListener("click", () => {
+        clearCredentials();
+        log("Credentials cleared.");
+      });
       els.conflictReplace.addEventListener("click", () => closeConflictDialog("replace"));
       els.conflictNew.addEventListener("click", () => closeConflictDialog("new"));
       els.conflictCancel.addEventListener("click", () => closeConflictDialog(null));
