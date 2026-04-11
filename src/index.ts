@@ -1105,8 +1105,11 @@ function renderHtml(): string {
             conflictMode,
           });
           log("Job " + queued.job.id + " queued.");
+          state.sourceSelections.clear();
+          renderSideList("source");
           setStatus(els.sourceStatus, "Job queued: " + queued.job.id);
           setStatus(els.destinationStatus, "Job queued: " + queued.job.id);
+          syncSummary();
           await refreshJobs();
         } catch (error) {
           log(errorMessage(error), "error");
