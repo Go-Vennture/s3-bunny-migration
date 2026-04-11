@@ -296,6 +296,7 @@ function renderHtml(): string {
     .transfer-card h3{margin:0;font-size:18px}
     .summary{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
     .selection-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 10px;font-size:12px;background:rgba(15,118,110,.08);color:var(--accent);border:1px solid rgba(15,118,110,.14)}
+    .transfer-status{margin-top:-2px}
     .log{display:grid;gap:8px;background:rgba(255,255,255,.7);border:1px solid rgba(47,45,41,.12);border-radius:16px;padding:12px;min-height:96px;max-height:240px;overflow-y:auto;font-size:13px;color:var(--muted)}
     .jobs-list{min-height:220px}
     .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.2fr) 100px 120px minmax(0,1.6fr)}
@@ -414,6 +415,7 @@ function renderHtml(): string {
           <span class="selection-pill" id="selectionCount">0 selected</span>
           <span class="pill" id="destinationSummary">Destination root</span>
         </div>
+        <div class="inline-note transfer-status" id="transferStatus">Ready to queue a transfer.</div>
         <div class="row">
           <button class="primary" id="transferButton">Start background transfer</button>
           <button class="secondary" id="clearSelection">Clear selection</button>
@@ -486,6 +488,7 @@ function renderHtml(): string {
         loadDestinationPath: $("loadDestinationPath"),
         selectionCount: $("selectionCount"),
         destinationSummary: $("destinationSummary"),
+        transferStatus: $("transferStatus"),
         transferButton: $("transferButton"),
         clearSelection: $("clearSelection"),
         log: $("log"),
@@ -1084,6 +1087,7 @@ function renderHtml(): string {
         }
         els.transferButton.disabled = true;
         state.transferQueueNotice = "";
+        setStatus(els.transferStatus, "Checking destination for conflicts...");
         setStatus(els.sourceStatus, "Checking destination for conflicts...");
         setStatus(els.destinationStatus, "Checking destination for conflicts...");
         log("Checking transfer of " + String(selections.length) + " selected item(s).");
@@ -1128,6 +1132,7 @@ function renderHtml(): string {
             log("Transfer cancelled.");
             return;
           }
+          setStatus(els.transferStatus, "Queueing background job...");
           setStatus(els.sourceStatus, "Queueing background job...");
           setStatus(els.destinationStatus, "Queueing background job...");
           state.transferQueueNotice = "Queuing transfer of " + String(selections.length) + " selected item(s)...";
@@ -1146,6 +1151,7 @@ function renderHtml(): string {
           };
           state.sourceSelections.clear();
           renderSideList("source");
+          setStatus(els.transferStatus, "Queued job " + queued.job.id + ".");
           setStatus(els.sourceStatus, "Job queued: " + queued.job.id);
           setStatus(els.destinationStatus, "Job queued: " + queued.job.id);
           syncSummary();
@@ -1154,6 +1160,7 @@ function renderHtml(): string {
           state.transferQueueNotice = "";
           renderJobs();
           log(errorMessage(error), "error");
+          setStatus(els.transferStatus, "Queue failed.", "error");
           setStatus(els.sourceStatus, "Queue failed.", "error");
           setStatus(els.destinationStatus, "Queue failed.", "error");
         } finally {
