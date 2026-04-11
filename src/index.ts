@@ -293,8 +293,9 @@ function renderHtml(): string {
     .jobs-list{min-height:220px}
     .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.2fr) 100px 120px minmax(0,1.6fr)}
     .error{color:#b42318}
-    .dialog-backdrop{position:fixed;inset:0;background:rgba(28,24,20,.48);backdrop-filter:blur(10px);display:grid;place-items:center;padding:20px;z-index:40}
-    .dialog-card{width:min(560px,100%);background:#fff;border:1px solid rgba(47,45,41,.12);border-radius:24px;box-shadow:0 24px 80px rgba(28,24,20,.24);padding:20px;display:grid;gap:14px}
+    .dialog-backdrop[hidden]{display:none !important}
+    .dialog-backdrop{position:fixed;inset:0;background:rgba(28,24,20,.48);backdrop-filter:blur(10px);display:grid;place-items:center;padding:20px;z-index:9999;pointer-events:auto}
+    .dialog-card{position:relative;width:min(560px,100%);background:#fff;border:1px solid rgba(47,45,41,.12);border-radius:24px;box-shadow:0 24px 80px rgba(28,24,20,.24);padding:20px;display:grid;gap:14px;pointer-events:auto}
     .dialog-card h3{margin:0;font-size:20px}
     .dialog-card p{margin:0;color:var(--muted);line-height:1.5}
     .dialog-list{display:grid;gap:6px;max-height:220px;overflow-y:auto;border:1px solid rgba(47,45,41,.08);border-radius:16px;padding:12px;background:rgba(244,241,234,.42);font-size:13px;color:var(--text)}
@@ -428,9 +429,9 @@ function renderHtml(): string {
       <p id="conflictDialogMessage"></p>
       <div class="dialog-list" id="conflictDialogList"></div>
       <div class="dialog-actions">
-        <button type="button" class="secondary" id="conflictReplace">Replace existing</button>
-        <button type="button" class="secondary" id="conflictNew">Copy only new</button>
-        <button type="button" class="ghost" id="conflictCancel">Cancel</button>
+        <button type="button" class="secondary" id="conflictReplace" data-conflict-choice="replace">Replace existing</button>
+        <button type="button" class="secondary" id="conflictNew" data-conflict-choice="new">Copy only new</button>
+        <button type="button" class="ghost" id="conflictCancel" data-conflict-choice="cancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -1126,6 +1127,27 @@ function renderHtml(): string {
       els.conflictReplace.addEventListener("click", () => closeConflictDialog("replace"));
       els.conflictNew.addEventListener("click", () => closeConflictDialog("new"));
       els.conflictCancel.addEventListener("click", () => closeConflictDialog(null));
+      document.addEventListener("click", (event) => {
+        if (!els.conflictDialog || els.conflictDialog.hidden) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const choice = target.closest("[data-conflict-choice]");
+        if (choice instanceof HTMLElement) {
+          event.preventDefault();
+          const action = choice.getAttribute("data-conflict-choice");
+          if (action === "replace") {
+            closeConflictDialog("replace");
+          } else if (action === "new") {
+            closeConflictDialog("new");
+          } else {
+            closeConflictDialog(null);
+          }
+          return;
+        }
+        if (target === els.conflictDialog) {
+          closeConflictDialog(null);
+        }
+      });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && els.conflictDialog && !els.conflictDialog.hidden) {
           event.preventDefault();
