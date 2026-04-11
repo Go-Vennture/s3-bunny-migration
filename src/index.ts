@@ -202,16 +202,21 @@ const REGION_ENDPOINTS: Record<string, string> = {
 export default {
   async fetch(request: Request, env: AppEnv): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/") return new Response(renderHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
-    if (request.method === "GET" && url.pathname === "/favicon.ico") return faviconResponse();
-    if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
-    if (request.method === "POST" && url.pathname === "/api/aws/buckets") return json({ buckets: await listAwsBuckets(await parseAwsCredentials(request)) });
-    if (request.method === "POST" && url.pathname === "/api/aws/list") return handleAwsList(request);
-    if (request.method === "POST" && url.pathname === "/api/bunny/zones") return handleBunnyZones(request);
-    if (request.method === "POST" && url.pathname === "/api/bunny/list") return handleBunnyList(request);
-    if (request.method === "POST" && url.pathname === "/api/transfer") return handleTransfer(request, env);
-    if (request.method === "GET" && url.pathname === "/api/jobs") return handleJobs(request, env);
-    return new Response("Not found", { status: 404 });
+    try {
+      if (request.method === "GET" && url.pathname === "/") return new Response(renderHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
+      if (request.method === "GET" && url.pathname === "/favicon.ico") return faviconResponse();
+      if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
+      if (request.method === "POST" && url.pathname === "/api/aws/buckets") return json({ buckets: await listAwsBuckets(await parseAwsCredentials(request)) });
+      if (request.method === "POST" && url.pathname === "/api/aws/list") return handleAwsList(request);
+      if (request.method === "POST" && url.pathname === "/api/bunny/zones") return handleBunnyZones(request);
+      if (request.method === "POST" && url.pathname === "/api/bunny/list") return handleBunnyList(request);
+      if (request.method === "POST" && url.pathname === "/api/transfer") return handleTransfer(request, env);
+      if (request.method === "GET" && url.pathname === "/api/jobs") return handleJobs(request, env);
+      return new Response("Not found", { status: 404 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return json({ error: message }, { status: 500 });
+    }
   },
 } satisfies ExportedHandler<AppEnv>;
 
@@ -853,14 +858,25 @@ function renderHtml(): string {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         });
-        const payload = await response.json().catch(() => ({}));
-        return { response, payload };
+        const raw = await response.text();
+        let payload = {};
+        if (raw) {
+          try {
+            payload = JSON.parse(raw);
+          } catch {
+            payload = { raw };
+          }
+        }
+        return { response, payload, raw };
       }
 
       async function postJson(path, body) {
-        const { response, payload } = await postJsonResponse(path, body);
+        const { response, payload, raw } = await postJsonResponse(path, body);
         if (!response.ok) {
-          throw new Error(payload && payload.error ? payload.error : response.statusText || "Request failed");
+          const detail = payload && typeof payload === "object" && payload.error ? payload.error : raw;
+          throw new Error(detail
+            ? "Request failed (" + String(response.status) + " " + (response.statusText || "unknown") + "): " + String(detail)
+            : "Request failed (" + String(response.status) + " " + (response.statusText || "unknown") + ")");
         }
         return payload;
       }
@@ -1066,7 +1082,10 @@ function renderHtml(): string {
             previewOnly: true,
           });
           if (!preview.response.ok && preview.response.status !== 409) {
-            throw new Error(preview.payload && preview.payload.error ? preview.payload.error : preview.response.statusText || "Request failed");
+            const previewError = preview.payload && typeof preview.payload === "object" && preview.payload.error ? preview.payload.error : preview.raw;
+            throw new Error(previewError
+              ? "Preview failed (" + String(preview.response.status) + " " + (preview.response.statusText || "unknown") + "): " + String(previewError)
+              : "Preview failed (" + String(preview.response.status) + " " + (preview.response.statusText || "unknown") + ")");
           }
           const conflicts = Array.isArray(preview.payload.conflicts) ? preview.payload.conflicts.map((item) => String(item)) : [];
           const conflictCount = Number(preview.payload.conflictCount || conflicts.length || 0);
