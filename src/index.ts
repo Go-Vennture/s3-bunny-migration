@@ -513,6 +513,7 @@ function renderHtml(): string {
       };
       let conflictDialogResolve = null;
       let uiPersistenceEnabled = false;
+      let pendingDestinationRefresh = null;
 
       function escapeHtml(value) {
         return String(value)
@@ -1031,6 +1032,20 @@ function renderHtml(): string {
           }
           state.jobs = payload.jobs || [];
           renderJobs();
+          if (pendingDestinationRefresh) {
+            const job = state.jobs.find((item) => item.id === pendingDestinationRefresh.jobId);
+            const completed = job && job.status === "completed";
+            const failed = job && job.status === "failed";
+            if (completed || failed) {
+              const matchesDestination = selectedProvider("destination") === pendingDestinationRefresh.provider &&
+                selectedResource("destination") &&
+                selectedResource("destination").name === pendingDestinationRefresh.resource;
+              pendingDestinationRefresh = null;
+              if (completed && matchesDestination) {
+                await loadPath("destination", false);
+              }
+            }
+          }
         } catch (error) {
           setStatus(els.jobsStatus, "Could not refresh jobs.", "error");
           log(errorMessage(error), "error");
@@ -1105,6 +1120,11 @@ function renderHtml(): string {
             conflictMode,
           });
           log("Job " + queued.job.id + " queued.");
+          pendingDestinationRefresh = {
+            jobId: queued.job.id,
+            provider: selectedProvider("destination"),
+            resource: destinationResource.name,
+          };
           state.sourceSelections.clear();
           renderSideList("source");
           setStatus(els.sourceStatus, "Job queued: " + queued.job.id);
