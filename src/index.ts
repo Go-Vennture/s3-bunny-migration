@@ -515,6 +515,7 @@ function renderHtml(): string {
         destinationItems: [],
         destinationContinuationToken: null,
         jobs: [],
+        transferQueueNotice: "",
       };
       let conflictDialogResolve = null;
       let uiPersistenceEnabled = false;
@@ -841,9 +842,10 @@ function renderHtml(): string {
 
       function renderJobs() {
         const header = '<div class="list-head"><div>Job</div><div>Status</div><div>Progress</div><div>Details</div></div>';
+        const queueNotice = state.transferQueueNotice;
         if (!state.jobs.length) {
           els.jobsList.innerHTML = header + '<div class="list-row"><div class="meta">No jobs yet.</div><div></div><div></div><div class="meta">Start a transfer to queue one.</div></div>';
-          els.jobsStatus.textContent = "No background jobs running.";
+          els.jobsStatus.textContent = queueNotice || "No background jobs running.";
           return;
         }
         els.jobsList.innerHTML = header + state.jobs.map((job) => {
@@ -868,7 +870,7 @@ function renderHtml(): string {
           '</div>';
         }).join("");
         const running = state.jobs.find((job) => job.status === "running" || job.status === "queued");
-        els.jobsStatus.textContent = running ? "Latest active job: " + running.id : "No active jobs.";
+        els.jobsStatus.textContent = queueNotice || (running ? "Latest active job: " + running.id : "No active jobs.");
       }
 
       async function postJsonResponse(path, body) {
@@ -1085,6 +1087,7 @@ function renderHtml(): string {
           return;
         }
         els.transferButton.disabled = true;
+        state.transferQueueNotice = "";
         setStatus(els.sourceStatus, "Checking destination for conflicts...");
         setStatus(els.destinationStatus, "Checking destination for conflicts...");
         log("Checking transfer of " + String(selections.length) + " selected item(s).");
@@ -1131,11 +1134,14 @@ function renderHtml(): string {
           }
           setStatus(els.sourceStatus, "Queueing background job...");
           setStatus(els.destinationStatus, "Queueing background job...");
+          state.transferQueueNotice = "Queuing transfer of " + String(selections.length) + " selected item(s)...";
+          renderJobs();
           log("Queueing transfer of " + String(selections.length) + " selected item(s).");
           const queued = await postJson("/api/transfer", {
             ...payload,
             conflictMode,
           });
+          state.transferQueueNotice = "";
           log("Job " + queued.job.id + " queued.");
           pendingDestinationRefresh = {
             jobId: queued.job.id,
@@ -1149,11 +1155,15 @@ function renderHtml(): string {
           syncSummary();
           await refreshJobs();
         } catch (error) {
+          state.transferQueueNotice = "";
+          renderJobs();
           log(errorMessage(error), "error");
           setStatus(els.sourceStatus, "Queue failed.", "error");
           setStatus(els.destinationStatus, "Queue failed.", "error");
         } finally {
+          state.transferQueueNotice = "";
           els.transferButton.disabled = false;
+          renderJobs();
         }
       }
 
