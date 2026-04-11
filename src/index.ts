@@ -17,11 +17,28 @@ type AwsBucket = S3Bucket & {
   region: string;
 };
 
+type StorageProvider = "aws" | "bunny";
+
+type StorageResourceRef = {
+  provider: StorageProvider;
+  name: string;
+  region: string;
+};
+
 type S3Item = {
   key: string;
   size: number;
   lastModified?: string;
   type: "file" | "folder";
+};
+
+type StorageItem = {
+  key: string;
+  name: string;
+  type: "file" | "folder";
+  size: number;
+  lastModified?: string;
+  lastChanged?: string;
 };
 
 type BunnyZone = {
@@ -47,12 +64,12 @@ type TransferSelection = {
 
 type TransferRequest = {
   aws: AwsCredentials;
-  sourceBucket: string;
+  bunnyApiKey: string;
+  source: StorageResourceRef;
   sourcePrefix: string;
   selections: TransferSelection[];
-  bunnyApiKey: string;
-  destinationZone: string;
-  destinationPrefix?: string;
+  destination: StorageResourceRef;
+  destinationPrefix: string;
 };
 
 type TransferPlanEntry = {
@@ -64,22 +81,29 @@ type ResolvedBunnyZone = BunnyZone & {
   password: string;
 };
 
+type ResolvedStorageResource = StorageResourceRef & {
+  password?: string;
+};
+
 type TransferJobSelection = TransferSelection;
 
 type TransferJobCreateRequest = {
   aws: AwsCredentials;
-  sourceBucket: string;
+  source: StorageResourceRef & { password?: string };
   sourcePrefix: string;
   selections: TransferJobSelection[];
-  destinationPrefix?: string;
-  bunnyZone: ResolvedBunnyZone;
+  destinationPrefix: string;
+  destination: StorageResourceRef & { password?: string };
 };
 
 type TransferJobSummary = {
   id: string;
   status: string;
-  sourceBucket: string;
-  destinationZone: string;
+  sourceProvider: StorageProvider;
+  sourceResource: string;
+  destinationProvider: StorageProvider;
+  destinationResource: string;
+  sourcePrefix: string;
   destinationPrefix: string;
   selections: number;
   copied: number;
@@ -113,12 +137,15 @@ type TransferJobRow = {
   created_at: number;
   updated_at: number;
   status: string;
+  source_provider: StorageProvider;
   source_bucket: string;
   source_region: string;
   source_prefix: string;
+  source_resource_password: string | null;
   aws_access_key_id: string;
   aws_secret_access_key: string;
   aws_session_token: string | null;
+  destination_provider: StorageProvider;
   destination_zone: string;
   destination_zone_region: string;
   destination_zone_password: string;
@@ -273,8 +300,8 @@ function renderHtml(): string {
     <section class="layout">
       <article class="panel">
         <div class="panel-head">
-          <h2>AWS source</h2>
-          <p>Use one AWS key pair to list all buckets, then browse folders or mark entire trees for copy.</p>
+          <h2>Shared AWS credentials</h2>
+          <p>Used whenever a source or destination side is set to AWS.</p>
         </div>
         <div class="panel-body">
           <div class="grid-2">
@@ -286,8 +313,8 @@ function renderHtml(): string {
 
       <article class="panel">
         <div class="panel-head">
-          <h2>Bunny destination</h2>
-          <p>List storage zones with the Bunny account API key, then browse the selected zone like a folder tree.</p>
+          <h2>Shared Bunny credentials</h2>
+          <p>Used whenever a source or destination side is set to Bunny.</p>
         </div>
         <div class="panel-body">
           <div class="field"><label for="bunnyApiKey">Bunny account API key</label><input id="bunnyApiKey" type="password" autocomplete="off" spellcheck="false" /></div>
@@ -297,42 +324,60 @@ function renderHtml(): string {
 
     <section class="contents-layout">
       <article class="contents-card">
-        <h3>AWS contents</h3>
-        <div class="inline-note" id="awsStatus">Load a bucket to see folders and files.</div>
+        <h3>Source</h3>
+        <div class="inline-note" id="sourceStatus">Load a resource to see folders and files.</div>
         <div class="contents-controls">
           <div class="contents-select-row">
             <div class="field" style="margin:0">
-              <label for="awsBucketSelect">Bucket</label>
-              <select id="awsBucketSelect"><option value="">Load buckets first</option></select>
+              <label for="sourceProviderSelect">Source provider</label>
+              <select id="sourceProviderSelect">
+                <option value="aws">AWS</option>
+                <option value="bunny">Bunny</option>
+              </select>
             </div>
-            <button class="secondary" id="loadAwsBuckets">Refresh buckets</button>
+          </div>
+          <div class="contents-select-row">
+            <div class="field" style="margin:0">
+              <label for="sourceResourceSelect">Resource</label>
+              <select id="sourceResourceSelect"><option value="">Load resources first</option></select>
+            </div>
+            <button class="secondary" id="loadSourceResources">Refresh resources</button>
           </div>
           <div class="contents-path-row">
-            <button class="ghost mini" id="awsUp" title="Parent folder">..</button>
-            <div class="field" style="margin:0"><label for="awsPrefix">Path</label><input id="awsPrefix" autocomplete="off" spellcheck="false" placeholder="optional/prefix/" value="" /></div>
-            <button class="secondary" id="loadAwsPath">Refresh</button>
+            <button class="ghost mini" id="sourceUp" title="Parent folder">..</button>
+            <div class="field" style="margin:0"><label for="sourcePrefix">Path</label><input id="sourcePrefix" autocomplete="off" spellcheck="false" placeholder="optional/prefix/" value="" /></div>
+            <button class="secondary" id="loadSourcePath">Refresh</button>
           </div>
         </div>
-        <div class="list contents-list" id="awsList" aria-live="polite"></div>
+        <div class="list contents-list" id="sourceList" aria-live="polite"></div>
       </article>
       <article class="contents-card">
-        <h3>Bunny contents</h3>
-        <div class="inline-note" id="bunnyStatus">Load a zone to browse its contents.</div>
+        <h3>Destination</h3>
+        <div class="inline-note" id="destinationStatus">Load a resource to browse its contents.</div>
         <div class="contents-controls">
           <div class="contents-select-row">
             <div class="field" style="margin:0">
-              <label for="bunnyZoneSelect">Storage zone</label>
-              <select id="bunnyZoneSelect"><option value="">Load zones first</option></select>
+              <label for="destinationProviderSelect">Destination provider</label>
+              <select id="destinationProviderSelect">
+                <option value="aws">AWS</option>
+                <option value="bunny">Bunny</option>
+              </select>
             </div>
-            <button class="secondary" id="loadBunnyZones">Refresh zones</button>
+          </div>
+          <div class="contents-select-row">
+            <div class="field" style="margin:0">
+              <label for="destinationResourceSelect">Resource</label>
+              <select id="destinationResourceSelect"><option value="">Load resources first</option></select>
+            </div>
+            <button class="secondary" id="loadDestinationResources">Refresh resources</button>
           </div>
           <div class="contents-path-row">
-            <button class="ghost mini" id="bunnyUp" title="Parent folder">..</button>
-            <div class="field" style="margin:0"><label for="bunnyPrefix">Path</label><input id="bunnyPrefix" autocomplete="off" spellcheck="false" placeholder="destination/prefix/" value="" /></div>
-            <button class="secondary" id="loadBunnyPath">Refresh</button>
+            <button class="ghost mini" id="destinationUp" title="Parent folder">..</button>
+            <div class="field" style="margin:0"><label for="destinationPrefix">Path</label><input id="destinationPrefix" autocomplete="off" spellcheck="false" placeholder="destination/prefix/" value="" /></div>
+            <button class="secondary" id="loadDestinationPath">Refresh</button>
           </div>
         </div>
-        <div class="list contents-list" id="bunnyList" aria-live="polite"></div>
+        <div class="list contents-list" id="destinationList" aria-live="polite"></div>
       </article>
     </section>
 
@@ -380,24 +425,26 @@ function renderHtml(): string {
       };
 
       try {
-      const els = {
+            const els = {
         awsAccessKeyId: $("awsAccessKeyId"),
         awsSecretAccessKey: $("awsSecretAccessKey"),
-        awsBucketSelect: $("awsBucketSelect"),
-        awsPrefix: $("awsPrefix"),
-        awsList: $("awsList"),
-        awsStatus: $("awsStatus"),
-        awsUp: $("awsUp"),
-        loadAwsBuckets: $("loadAwsBuckets"),
-        loadAwsPath: $("loadAwsPath"),
         bunnyApiKey: $("bunnyApiKey"),
-        bunnyZoneSelect: $("bunnyZoneSelect"),
-        bunnyPrefix: $("bunnyPrefix"),
-        bunnyList: $("bunnyList"),
-        bunnyStatus: $("bunnyStatus"),
-        bunnyUp: $("bunnyUp"),
-        loadBunnyZones: $("loadBunnyZones"),
-        loadBunnyPath: $("loadBunnyPath"),
+        sourceProviderSelect: $("sourceProviderSelect"),
+        sourceResourceSelect: $("sourceResourceSelect"),
+        sourcePrefix: $("sourcePrefix"),
+        sourceList: $("sourceList"),
+        sourceStatus: $("sourceStatus"),
+        sourceUp: $("sourceUp"),
+        loadSourceResources: $("loadSourceResources"),
+        loadSourcePath: $("loadSourcePath"),
+        destinationProviderSelect: $("destinationProviderSelect"),
+        destinationResourceSelect: $("destinationResourceSelect"),
+        destinationPrefix: $("destinationPrefix"),
+        destinationList: $("destinationList"),
+        destinationStatus: $("destinationStatus"),
+        destinationUp: $("destinationUp"),
+        loadDestinationResources: $("loadDestinationResources"),
+        loadDestinationPath: $("loadDestinationPath"),
         selectionCount: $("selectionCount"),
         destinationSummary: $("destinationSummary"),
         transferButton: $("transferButton"),
@@ -407,17 +454,17 @@ function renderHtml(): string {
         jobsStatus: $("jobsStatus"),
       };
 
-      const STORAGE_KEY = "s3-bunny-migration:ui-state:v2";
+      const STORAGE_KEY = "s3-bunny-migration:ui-state:v3";
       const STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 
       const state = {
-        awsItems: [],
         awsBuckets: [],
-        awsBucketRegions: new Map(),
-        bunnyItems: [],
-        awsSelections: new Map(),
-        awsContinuationToken: null,
         bunnyZones: [],
+        sourceItems: [],
+        sourceContinuationToken: null,
+        sourceSelections: new Map(),
+        destinationItems: [],
+        destinationContinuationToken: null,
         jobs: [],
       };
 
@@ -426,7 +473,7 @@ function renderHtml(): string {
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;");
+          .replace(/\"/g, "&quot;");
       }
 
       function formatBytes(bytes) {
@@ -463,16 +510,63 @@ function renderHtml(): string {
         return left + "/" + right;
       }
 
-      function selectedBucket() {
-        return els.awsBucketSelect.value.trim();
+      function sideElements(side) {
+        return side === "source"
+          ? {
+              providerSelect: els.sourceProviderSelect,
+              resourceSelect: els.sourceResourceSelect,
+              prefix: els.sourcePrefix,
+              list: els.sourceList,
+              status: els.sourceStatus,
+              up: els.sourceUp,
+              loadResources: els.loadSourceResources,
+              loadPath: els.loadSourcePath,
+            }
+          : {
+              providerSelect: els.destinationProviderSelect,
+              resourceSelect: els.destinationResourceSelect,
+              prefix: els.destinationPrefix,
+              list: els.destinationList,
+              status: els.destinationStatus,
+              up: els.destinationUp,
+              loadResources: els.loadDestinationResources,
+              loadPath: els.loadDestinationPath,
+            };
       }
 
-      function selectedAwsRegion() {
-        return state.awsBucketRegions.get(selectedBucket()) || "us-east-1";
+      function providerLabel(provider) {
+        return provider === "aws" ? "AWS" : "Bunny";
       }
 
-      function selectedZone() {
-        return els.bunnyZoneSelect.value.trim();
+      function selectedProvider(side) {
+        return sideElements(side).providerSelect.value === "bunny" ? "bunny" : "aws";
+      }
+
+      function selectedResource(side) {
+        const provider = selectedProvider(side);
+        const value = sideElements(side).resourceSelect.value.trim();
+        if (!value) return null;
+        return provider === "aws"
+          ? state.awsBuckets.find((bucket) => bucket.name === value) || null
+          : state.bunnyZones.find((zone) => zone.name === value) || null;
+      }
+
+      function sideItems(side) {
+        return side === "source" ? state.sourceItems : state.destinationItems;
+      }
+
+      function setSideItems(side, items) {
+        if (side === "source") state.sourceItems = items;
+        else state.destinationItems = items;
+      }
+
+      function sideContinuationToken(side) {
+        return side === "source" ? state.sourceContinuationToken : state.destinationContinuationToken;
+      }
+
+      function setSideContinuationToken(side, token) {
+        if (side === "source") state.sourceContinuationToken = token;
+        else state.destinationContinuationToken = token;
       }
 
       function log(message, kind = "info") {
@@ -510,12 +604,14 @@ function renderHtml(): string {
             expiresAt: Date.now() + STORAGE_TTL_MS,
             awsAccessKeyId: els.awsAccessKeyId.value,
             awsSecretAccessKey: els.awsSecretAccessKey.value,
-            awsBucketSelect: els.awsBucketSelect.value,
-            awsPrefix: els.awsPrefix.value,
             bunnyApiKey: els.bunnyApiKey.value,
-            bunnyZoneSelect: els.bunnyZoneSelect.value,
-            bunnyPrefix: els.bunnyPrefix.value,
-            awsSelections: Array.from(state.awsSelections.keys()),
+            sourceProvider: els.sourceProviderSelect.value,
+            sourceResource: els.sourceResourceSelect.value,
+            sourcePrefix: els.sourcePrefix.value,
+            destinationProvider: els.destinationProviderSelect.value,
+            destinationResource: els.destinationResourceSelect.value,
+            destinationPrefix: els.destinationPrefix.value,
+            sourceSelections: Array.from(state.sourceSelections.keys()),
           }));
         } catch {
           // Local storage can be unavailable in some browser privacy modes.
@@ -526,13 +622,15 @@ function renderHtml(): string {
         const saved = readUiState();
         els.awsAccessKeyId.value = saved.awsAccessKeyId || "";
         els.awsSecretAccessKey.value = saved.awsSecretAccessKey || "";
-        els.awsBucketSelect.value = saved.awsBucketSelect || "";
-        els.awsPrefix.value = saved.awsPrefix || "";
         els.bunnyApiKey.value = saved.bunnyApiKey || "";
-        els.bunnyZoneSelect.value = saved.bunnyZoneSelect || "";
-        els.bunnyPrefix.value = saved.bunnyPrefix || "";
-        const selections = Array.isArray(saved.awsSelections) ? saved.awsSelections : [];
-        state.awsSelections = new Map(selections.map((key) => [String(key), true]));
+        els.sourceProviderSelect.value = saved.sourceProvider || (saved.awsBucketSelect ? "aws" : "aws");
+        els.sourceResourceSelect.value = saved.sourceResource || saved.awsBucketSelect || "";
+        els.sourcePrefix.value = saved.sourcePrefix || saved.awsPrefix || "";
+        els.destinationProviderSelect.value = saved.destinationProvider || (saved.bunnyZoneSelect ? "bunny" : "bunny");
+        els.destinationResourceSelect.value = saved.destinationResource || saved.bunnyZoneSelect || "";
+        els.destinationPrefix.value = saved.destinationPrefix || saved.bunnyPrefix || "";
+        const selections = Array.isArray(saved.sourceSelections) ? saved.sourceSelections : Array.isArray(saved.awsSelections) ? saved.awsSelections : [];
+        state.sourceSelections = new Map(selections.map((key) => [String(key), true]));
       }
 
       function setStatus(target, message, kind = "info") {
@@ -540,79 +638,108 @@ function renderHtml(): string {
         target.classList.toggle("error", kind === "error");
       }
 
+      function summarizeSide(side) {
+        const provider = selectedProvider(side);
+        const resource = selectedResource(side);
+        const prefix = ensureTrailingSlash(sideElements(side).prefix.value).replace(/\/+$/, "");
+        if (!resource) {
+          return providerLabel(provider) + " root";
+        }
+        return prefix ? providerLabel(provider) + " " + resource.name + "/" + prefix : providerLabel(provider) + " " + resource.name;
+      }
+
       function syncSummary() {
-        els.selectionCount.textContent = String(state.awsSelections.size) + " selected";
-        const zone = selectedZone();
-        const destinationPrefix = ensureTrailingSlash(els.bunnyPrefix.value);
-        els.destinationSummary.textContent = zone
-          ? "Destination: " + zone + "/" + (destinationPrefix ? destinationPrefix : "")
-          : (destinationPrefix ? "Destination: " + destinationPrefix : "Destination root");
+        els.selectionCount.textContent = String(state.sourceSelections.size) + " selected";
+        els.destinationSummary.textContent = summarizeSide("source") + " -> " + summarizeSide("destination");
         writeUiState();
       }
 
-      function renderAwsList() {
-        const header = '<div class="list-head"><div></div><div>Name</div><div class="size-col">Size</div><div>Modified</div></div>';
-        if (!state.awsItems.length) {
-          els.awsList.innerHTML = header + '<div class="list-row"><div></div><div class="meta">No objects loaded yet.</div><div></div><div></div></div>';
+      function populateResourceSelect(side, resources) {
+        const elements = sideElements(side);
+        const provider = selectedProvider(side);
+        const previous = elements.resourceSelect.value.trim();
+        if (!resources.length) {
+          elements.resourceSelect.innerHTML = '<option value="">' + (provider === "aws" ? "No buckets returned" : "No storage zones returned") + '</option>';
+          elements.resourceSelect.value = "";
           return;
         }
-        const rows = state.awsItems.map((item) => {
-          const checked = state.awsSelections.has(item.key) ? "checked" : "";
-          const icon = item.type === "folder" ? "▸" : "⬚";
-          const label = item.type === "folder" ? item.key.replace(/\/+$/, "").split("/").pop() + "/" : item.key.split("/").pop();
-          return '<div class="list-row">' +
-            '<div><input class="check" type="checkbox" data-key="' + escapeHtml(item.key) + '" ' + checked + ' /></div>' +
-            '<div class="name-cell"><div class="icon">' + icon + '</div><button class="link" data-open-source="' + escapeHtml(item.key) + '">' + escapeHtml(label) + '</button></div>' +
-            '<div class="size-col meta">' + (item.type === "folder" ? "Folder" : formatBytes(item.size)) + '</div>' +
-            '<div class="meta">' + (item.lastModified || "") + '</div>' +
-            '</div>';
-        }).join("");
-        const more = state.awsContinuationToken ? '<div class="list-row"><div></div><div><button class="secondary" id="loadMoreAws">Load more</button></div><div></div><div></div></div>' : "";
-        els.awsList.innerHTML = header + rows + more;
-        els.awsList.querySelectorAll('input[type="checkbox"][data-key]').forEach((checkbox) => {
-          checkbox.addEventListener("change", () => {
-            if (checkbox.checked) state.awsSelections.set(checkbox.dataset.key, true);
-            else state.awsSelections.delete(checkbox.dataset.key);
-            syncSummary();
-          });
-        });
-        els.awsList.querySelectorAll("[data-open-source]").forEach((button) => {
-          button.addEventListener("click", () => {
-            const key = button.dataset.openSource || "";
-            if (key.endsWith("/")) {
-              els.awsPrefix.value = key;
-              loadAwsPath(false);
-            }
-          });
-        });
-        const moreButton = $("loadMoreAws");
-        if (moreButton) moreButton.addEventListener("click", () => loadAwsPath(true));
+        elements.resourceSelect.innerHTML = ['<option value="">' + (provider === "aws" ? "Choose a bucket" : "Choose a zone") + '</option>'].concat(
+          resources.map((resource) => '<option value="' + escapeHtml(resource.name) + '">' + escapeHtml(resource.name) + '</option>'),
+        ).join("");
+        if (previous && resources.some((resource) => resource.name === previous)) {
+          elements.resourceSelect.value = previous;
+        } else {
+          elements.resourceSelect.value = resources[0].name;
+        }
       }
 
-      function renderBunnyList() {
+      function normalizeAwsItems(items) {
+        return Array.isArray(items)
+          ? items.map((item) => ({
+              key: String(item.key || ""),
+              type: item.type === "folder" ? "folder" : "file",
+              size: Number(item.size || 0),
+              lastModified: String(item.lastModified || ""),
+            })).filter((item) => item.key)
+          : [];
+      }
+
+      function normalizeBunnyItems(items) {
+        return Array.isArray(items)
+          ? items.map((item) => ({
+              key: String(item.path || ""),
+              name: String(item.name || ""),
+              type: item.type === "folder" ? "folder" : "file",
+              size: Number(item.size || 0),
+              lastChanged: String(item.lastChanged || ""),
+            })).filter((item) => item.key)
+          : [];
+      }
+
+      function renderSideList(side) {
+        const elements = sideElements(side);
+        const items = sideItems(side);
         const header = '<div class="list-head"><div></div><div>Name</div><div class="size-col">Size</div><div>Modified</div></div>';
-        if (!state.bunnyItems.length) {
-          els.bunnyList.innerHTML = header + '<div class="list-row"><div></div><div class="meta">No objects loaded yet.</div><div></div><div></div></div>';
+        if (!items.length) {
+          elements.list.innerHTML = header + '<div class="list-row"><div></div><div class="meta">No objects loaded yet.</div><div></div><div></div></div>';
           return;
         }
-        els.bunnyList.innerHTML = header + state.bunnyItems.map((item) => {
-          const icon = item.type === "folder" ? "▸" : "⬚";
+        const rows = items.map((item) => {
+          const label = item.type === "folder"
+            ? item.key.replace(/\/+$/, "").split("/").pop() + "/"
+            : item.key.split("/").pop();
+          const checked = side === "source" && state.sourceSelections.has(item.key) ? "checked" : "";
           return '<div class="list-row">' +
-            '<div></div>' +
-            '<div class="name-cell"><div class="icon">' + icon + '</div><button class="link" data-open-bunny="' + escapeHtml(item.path) + '">' + escapeHtml(item.name) + '</button></div>' +
+            (side === "source" ? '<div><input class="check" type="checkbox" data-key="' + escapeHtml(item.key) + '" ' + checked + ' /></div>' : '<div></div>') +
+            '<div class="name-cell"><div class="icon">' + (item.type === "folder" ? "+" : "-") + '</div><button class="link" data-open="' + escapeHtml(item.key) + '">' + escapeHtml(label) + '</button></div>' +
             '<div class="size-col meta">' + (item.type === "folder" ? "Folder" : formatBytes(item.size)) + '</div>' +
-            '<div class="meta">' + (item.lastChanged || "") + '</div>' +
+            '<div class="meta">' + escapeHtml(item.lastModified || item.lastChanged || "") + '</div>' +
             '</div>';
         }).join("");
-        els.bunnyList.querySelectorAll("[data-open-bunny]").forEach((button) => {
+        const more = sideContinuationToken(side) ? '<div class="list-row"><div></div><div><button class="secondary" id="loadMore' + (side === "source" ? "Source" : "Destination") + '">Load more</button></div><div></div><div></div></div>' : "";
+        elements.list.innerHTML = header + rows + more;
+        if (side === "source") {
+          elements.list.querySelectorAll('input[type="checkbox"][data-key]').forEach((checkbox) => {
+            checkbox.addEventListener("change", () => {
+              if (checkbox.checked) state.sourceSelections.set(checkbox.dataset.key, true);
+              else state.sourceSelections.delete(checkbox.dataset.key);
+              syncSummary();
+            });
+          });
+        }
+        elements.list.querySelectorAll("[data-open]").forEach((button) => {
           button.addEventListener("click", () => {
-            const path = button.dataset.openBunny || "";
-            if (path.endsWith("/")) {
-              els.bunnyPrefix.value = path;
-              loadBunnyPath();
+            const key = button.dataset.open || "";
+            if (key.endsWith("/")) {
+              elements.prefix.value = key;
+              loadPath(side, false);
             }
           });
         });
+        const moreButton = $("loadMore" + (side === "source" ? "Source" : "Destination"));
+        if (moreButton) {
+          moreButton.addEventListener("click", () => loadPath(side, true));
+        }
       }
 
       function renderJobs() {
@@ -628,10 +755,11 @@ function renderHtml(): string {
             ? (job.failed ? String(job.copied) + " copied / " + String(job.failed) + " warning(s)" : String(job.copied) + " copied")
             : String(job.copied) + " copied / " + String(job.failed) + " failed";
           const details = job.lastKey ? escapeHtml(job.lastKey) : escapeHtml(job.message || "");
+          const route = providerLabel(job.sourceProvider) + " " + escapeHtml(job.sourceResource) + " -> " + providerLabel(job.destinationProvider) + " " + escapeHtml(job.destinationResource);
           return '<div class="list-row">' +
             '<div>' +
               '<div><strong>' + escapeHtml(job.id.slice(0, 8)) + '</strong></div>' +
-              '<div class="meta">' + escapeHtml(job.sourceBucket) + ' → ' + escapeHtml(job.destinationZone) + '</div>' +
+              '<div class="meta">' + route + '</div>' +
             '</div>' +
             '<div class="meta">' + escapeHtml(statusLabel) + '</div>' +
             '<div class="meta">' + escapeHtml(progress) + '</div>' +
@@ -655,106 +783,110 @@ function renderHtml(): string {
         return payload;
       }
 
-      async function loadAwsBuckets() {
-        setStatus(els.awsStatus, "Loading buckets...");
-        try {
-          const payload = await postJson("/api/aws/buckets", {
-            accessKeyId: els.awsAccessKeyId.value.trim(),
-            secretAccessKey: els.awsSecretAccessKey.value.trim(),
-          });
-          state.awsBuckets = Array.isArray(payload.buckets) ? payload.buckets : [];
-          state.awsBucketRegions = new Map(state.awsBuckets.map((bucket) => [bucket.name, bucket.region || "us-east-1"]));
-          els.awsBucketSelect.innerHTML = ['<option value="">Choose a bucket</option>'].concat(
-            state.awsBuckets.map((bucket) => '<option value="' + escapeHtml(bucket.name) + '">' + escapeHtml(bucket.name) + '</option>'),
-          ).join("");
-          if (state.awsBuckets[0] && !els.awsBucketSelect.value) {
-            els.awsBucketSelect.value = state.awsBuckets[0].name;
+      async function loadResources(side) {
+        const provider = selectedProvider(side);
+        const elements = sideElements(side);
+        if (provider === "aws") {
+          if (!els.awsAccessKeyId.value.trim() || !els.awsSecretAccessKey.value.trim()) {
+            setStatus(elements.status, "Enter AWS credentials first.", "error");
+            return;
           }
-          syncSummary();
-          setStatus(els.awsStatus, String(state.awsBuckets.length) + " bucket(s) loaded.");
-          log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
-          if (selectedBucket()) void loadAwsPath(false);
-        } catch (error) {
-          setStatus(els.awsStatus, "Could not load buckets.", "error");
-          log(errorMessage(error), "error");
-        }
-      }
-
-      async function loadAwsPath(append = false) {
-        const bucket = selectedBucket();
-        if (!bucket) {
-          log("Choose an AWS bucket first.", "error");
+          setStatus(elements.status, "Loading buckets...");
+          try {
+            const payload = await postJson("/api/aws/buckets", {
+              accessKeyId: els.awsAccessKeyId.value.trim(),
+              secretAccessKey: els.awsSecretAccessKey.value.trim(),
+            });
+            state.awsBuckets = Array.isArray(payload.buckets) ? payload.buckets : [];
+            ["source", "destination"].forEach((targetSide) => {
+              if (selectedProvider(targetSide) === "aws") {
+                populateResourceSelect(targetSide, state.awsBuckets);
+              }
+            });
+            setStatus(elements.status, String(state.awsBuckets.length) + " bucket(s) loaded.");
+            log("Loaded " + String(state.awsBuckets.length) + " AWS bucket(s).");
+            if (selectedResource(side)) {
+              await loadPath(side, false);
+            }
+          } catch (error) {
+            setStatus(elements.status, "Could not load buckets.", "error");
+            log(errorMessage(error), "error");
+          }
           return;
         }
-        if (!append) {
-          state.awsItems = [];
-          state.awsContinuationToken = null;
+        if (!els.bunnyApiKey.value.trim()) {
+          setStatus(elements.status, "Enter a Bunny API key first.", "error");
+          return;
         }
-        setStatus(els.awsStatus, "Loading " + bucket + "/" + els.awsPrefix.value.trim() + "...");
-        try {
-          const payload = await postJson("/api/aws/list", {
-            accessKeyId: els.awsAccessKeyId.value.trim(),
-            secretAccessKey: els.awsSecretAccessKey.value.trim(),
-            region: selectedAwsRegion(),
-            bucket,
-            prefix: ensureTrailingSlash(els.awsPrefix.value),
-            continuationToken: append ? state.awsContinuationToken : undefined,
-          });
-          state.awsItems = append ? state.awsItems.concat(payload.items || []) : (payload.items || []);
-          state.awsContinuationToken = payload.nextContinuationToken || null;
-          renderAwsList();
-          setStatus(els.awsStatus, String(state.awsItems.length) + " item(s) visible." + (state.awsContinuationToken ? " More available." : ""));
-        } catch (error) {
-          setStatus(els.awsStatus, "Could not load bucket contents.", "error");
-          log(errorMessage(error), "error");
-        }
-      }
-
-      async function loadBunnyZones() {
-        setStatus(els.bunnyStatus, "Loading zones...");
+        setStatus(elements.status, "Loading zones...");
         try {
           const payload = await postJson("/api/bunny/zones", { apiKey: els.bunnyApiKey.value.trim() });
-          state.bunnyZones = payload.zones || [];
+          state.bunnyZones = Array.isArray(payload.zones) ? payload.zones : [];
+          ["source", "destination"].forEach((targetSide) => {
+            if (selectedProvider(targetSide) === "bunny") {
+              populateResourceSelect(targetSide, state.bunnyZones);
+            }
+          });
           if (!state.bunnyZones.length) {
-            els.bunnyZoneSelect.innerHTML = '<option value="">No storage zones returned</option>';
-            setStatus(els.bunnyStatus, "No storage zones were returned for that Bunny API key.", "error");
+            setStatus(elements.status, "No storage zones were returned for that Bunny API key.", "error");
             log("Bunny returned 0 storage zones. Double-check that you used the Bunny account API key from the dashboard, not a storage zone password, and that the account actually has storage zones.", "error");
             return;
           }
-          els.bunnyZoneSelect.innerHTML = ['<option value="">Choose a zone</option>'].concat(state.bunnyZones.map((zone) => '<option value="' + escapeHtml(zone.name) + '">' + escapeHtml(zone.name) + '</option>')).join("");
-          if (state.bunnyZones[0] && !els.bunnyZoneSelect.value.trim()) {
-            els.bunnyZoneSelect.value = state.bunnyZones[0].name;
-          }
-          syncSummary();
-          setStatus(els.bunnyStatus, String(state.bunnyZones.length) + " zone(s) loaded.");
+          setStatus(elements.status, String(state.bunnyZones.length) + " zone(s) loaded.");
           log("Loaded " + String(state.bunnyZones.length) + " Bunny storage zone(s).");
-          if (selectedZone()) void loadBunnyPath();
+          if (selectedResource(side)) {
+            await loadPath(side, false);
+          }
         } catch (error) {
-          setStatus(els.bunnyStatus, "Could not load zones.", "error");
+          setStatus(elements.status, "Could not load zones.", "error");
           log(errorMessage(error), "error");
         }
       }
 
-      async function loadBunnyPath() {
-        const zoneName = selectedZone();
-        if (!zoneName) {
-          log("Choose a Bunny storage zone first.", "error");
+      async function loadPath(side, append = false) {
+        const provider = selectedProvider(side);
+        const elements = sideElements(side);
+        const resource = selectedResource(side);
+        if (!resource) {
+          log("Choose a " + (provider === "aws" ? "bucket" : "storage zone") + " first.", "error");
           return;
         }
-        const zone = state.bunnyZones.find((item) => item.name === zoneName);
-        setStatus(els.bunnyStatus, "Loading " + zoneName + "/" + els.bunnyPrefix.value.trim() + "...");
+        const prefix = ensureTrailingSlash(elements.prefix.value);
+        if (!append) {
+          setSideItems(side, []);
+          setSideContinuationToken(side, null);
+        }
+        setStatus(elements.status, "Loading " + providerLabel(provider) + " " + resource.name + "/" + prefix + "...");
         try {
-          const payload = await postJson("/api/bunny/list", {
-            apiKey: els.bunnyApiKey.value.trim(),
-            zoneName,
-            region: zone ? zone.region : "",
-            path: ensureTrailingSlash(els.bunnyPrefix.value),
-          });
-          state.bunnyItems = payload.items || [];
-          renderBunnyList();
-          setStatus(els.bunnyStatus, String(state.bunnyItems.length) + " item(s) visible.");
+          let items = [];
+          let nextContinuationToken = null;
+          if (provider === "aws") {
+            const payload = await postJson("/api/aws/list", {
+              accessKeyId: els.awsAccessKeyId.value.trim(),
+              secretAccessKey: els.awsSecretAccessKey.value.trim(),
+              region: resource.region,
+              bucket: resource.name,
+              prefix,
+              continuationToken: append ? sideContinuationToken(side) : undefined,
+            });
+            items = normalizeAwsItems(payload.items || []);
+            nextContinuationToken = payload.nextContinuationToken || null;
+          } else {
+            const payload = await postJson("/api/bunny/list", {
+              apiKey: els.bunnyApiKey.value.trim(),
+              zoneName: resource.name,
+              region: resource.region,
+              path: prefix,
+            });
+            items = normalizeBunnyItems(payload.items || []);
+          }
+          setSideItems(side, append ? sideItems(side).concat(items) : items);
+          setSideContinuationToken(side, nextContinuationToken);
+          renderSideList(side);
+          setStatus(elements.status, String(sideItems(side).length) + " item(s) visible." + (sideContinuationToken(side) ? " More available." : ""));
+          syncSummary();
         } catch (error) {
-          setStatus(els.bunnyStatus, "Could not load zone contents.", "error");
+          setStatus(elements.status, "Could not load " + providerLabel(provider) + " contents.", "error");
           log(errorMessage(error), "error");
         }
       }
@@ -775,46 +907,54 @@ function renderHtml(): string {
       }
 
       async function startTransfer() {
-        const selections = Array.from(state.awsSelections.keys()).map((key) => {
-          const item = state.awsItems.find((entry) => entry.key === key);
+        const selections = Array.from(state.sourceSelections.keys()).map((key) => {
+          const item = state.sourceItems.find((entry) => entry.key === key);
           return { kind: item && item.type === "folder" ? "folder" : "file", key };
         });
         if (!selections.length) {
           log("Select at least one file or folder to copy.", "error");
           return;
         }
-        const bucket = selectedBucket();
-        const zone = selectedZone();
-        if (!bucket || !zone) {
-          log("Choose both a source bucket and a destination zone first.", "error");
+        const sourceResource = selectedResource("source");
+        const destinationResource = selectedResource("destination");
+        if (!sourceResource || !destinationResource) {
+          log("Choose both a source and destination resource first.", "error");
           return;
         }
         els.transferButton.disabled = true;
-        setStatus(els.awsStatus, "Queueing background job...");
-        setStatus(els.bunnyStatus, "Queueing background job...");
+        setStatus(els.sourceStatus, "Queueing background job...");
+        setStatus(els.destinationStatus, "Queueing background job...");
         log("Queueing transfer of " + String(selections.length) + " selected item(s).");
         try {
           const payload = await postJson("/api/transfer", {
             aws: {
               accessKeyId: els.awsAccessKeyId.value.trim(),
               secretAccessKey: els.awsSecretAccessKey.value.trim(),
-              region: selectedAwsRegion(),
+              region: sourceResource.region,
             },
-            sourceBucket: bucket,
-            sourcePrefix: ensureTrailingSlash(els.awsPrefix.value),
-            selections,
             bunnyApiKey: els.bunnyApiKey.value.trim(),
-            destinationZone: zone,
-            destinationPrefix: ensureTrailingSlash(els.bunnyPrefix.value),
+            source: {
+              provider: selectedProvider("source"),
+              name: sourceResource.name,
+              region: sourceResource.region,
+            },
+            sourcePrefix: ensureTrailingSlash(els.sourcePrefix.value),
+            selections,
+            destination: {
+              provider: selectedProvider("destination"),
+              name: destinationResource.name,
+              region: destinationResource.region,
+            },
+            destinationPrefix: ensureTrailingSlash(els.destinationPrefix.value),
           });
           log("Job " + payload.job.id + " queued.");
-          setStatus(els.awsStatus, "Job queued: " + payload.job.id);
-          setStatus(els.bunnyStatus, "Job queued: " + payload.job.id);
+          setStatus(els.sourceStatus, "Job queued: " + payload.job.id);
+          setStatus(els.destinationStatus, "Job queued: " + payload.job.id);
           await refreshJobs();
         } catch (error) {
           log(errorMessage(error), "error");
-          setStatus(els.awsStatus, "Queue failed.", "error");
-          setStatus(els.bunnyStatus, "Queue failed.", "error");
+          setStatus(els.sourceStatus, "Queue failed.", "error");
+          setStatus(els.destinationStatus, "Queue failed.", "error");
         } finally {
           els.transferButton.disabled = false;
         }
@@ -822,86 +962,108 @@ function renderHtml(): string {
 
       restoreUiState();
       if (els.awsAccessKeyId.value.trim() && els.awsSecretAccessKey.value.trim()) {
-        void loadAwsBuckets();
+        if (selectedProvider("source") === "aws") void loadResources("source");
+        if (selectedProvider("destination") === "aws") void loadResources("destination");
       }
       if (els.bunnyApiKey.value.trim()) {
-        void loadBunnyZones();
+        if (selectedProvider("source") === "bunny") void loadResources("source");
+        if (selectedProvider("destination") === "bunny") void loadResources("destination");
       }
 
       [
         els.awsAccessKeyId,
         els.awsSecretAccessKey,
-        els.awsBucketSelect,
-        els.awsPrefix,
         els.bunnyApiKey,
-        els.bunnyZoneSelect,
-        els.bunnyPrefix,
+        els.sourceProviderSelect,
+        els.sourceResourceSelect,
+        els.sourcePrefix,
+        els.destinationProviderSelect,
+        els.destinationResourceSelect,
+        els.destinationPrefix,
       ].forEach((element) => {
         element.addEventListener("input", writeUiState);
         element.addEventListener("change", writeUiState);
       });
 
-      els.loadAwsBuckets.addEventListener("click", loadAwsBuckets);
-      els.loadAwsPath.addEventListener("click", () => loadAwsPath(false));
-      els.loadBunnyZones.addEventListener("click", loadBunnyZones);
-      els.loadBunnyPath.addEventListener("click", loadBunnyPath);
+      els.loadSourceResources.addEventListener("click", () => loadResources("source"));
+      els.loadSourcePath.addEventListener("click", () => loadPath("source", false));
+      els.loadDestinationResources.addEventListener("click", () => loadResources("destination"));
+      els.loadDestinationPath.addEventListener("click", () => loadPath("destination", false));
       els.transferButton.addEventListener("click", startTransfer);
       els.clearSelection.addEventListener("click", () => {
-        state.awsSelections.clear();
-        renderAwsList();
+        state.sourceSelections.clear();
+        renderSideList("source");
         syncSummary();
         log("Selection cleared.");
         writeUiState();
       });
-      els.awsUp.addEventListener("click", () => {
-        els.awsPrefix.value = parentPrefix(els.awsPrefix.value);
+      els.sourceUp.addEventListener("click", () => {
+        els.sourcePrefix.value = parentPrefix(els.sourcePrefix.value);
         syncSummary();
-        loadAwsPath(false);
+        loadPath("source", false);
       });
-      els.bunnyUp.addEventListener("click", () => {
-        els.bunnyPrefix.value = parentPrefix(els.bunnyPrefix.value);
+      els.destinationUp.addEventListener("click", () => {
+        els.destinationPrefix.value = parentPrefix(els.destinationPrefix.value);
         syncSummary();
-        loadBunnyPath();
+        loadPath("destination", false);
       });
-      els.awsBucketSelect.addEventListener("change", () => {
+      els.sourceProviderSelect.addEventListener("change", () => {
+        state.sourceSelections.clear();
+        state.sourceItems = [];
+        state.sourceContinuationToken = null;
+        populateResourceSelect("source", selectedProvider("source") === "aws" ? state.awsBuckets : state.bunnyZones);
+        renderSideList("source");
         syncSummary();
-        void loadAwsPath(false);
+        void loadResources("source");
       });
-      els.bunnyZoneSelect.addEventListener("change", () => {
+      els.destinationProviderSelect.addEventListener("change", () => {
+        state.destinationItems = [];
+        state.destinationContinuationToken = null;
+        populateResourceSelect("destination", selectedProvider("destination") === "aws" ? state.awsBuckets : state.bunnyZones);
+        renderSideList("destination");
         syncSummary();
-        void loadBunnyPath();
+        void loadResources("destination");
       });
-      els.awsPrefix.addEventListener("change", () => {
-        void loadAwsPath(false);
-      });
-      els.bunnyPrefix.addEventListener("change", () => {
+      els.sourceResourceSelect.addEventListener("change", () => {
+        state.sourceSelections.clear();
         syncSummary();
-        void loadBunnyPath();
+        void loadPath("source", false);
       });
-      els.awsPrefix.addEventListener("keydown", (event) => {
+      els.destinationResourceSelect.addEventListener("change", () => {
+        syncSummary();
+        void loadPath("destination", false);
+      });
+      els.sourcePrefix.addEventListener("change", () => {
+        syncSummary();
+        void loadPath("source", false);
+      });
+      els.destinationPrefix.addEventListener("change", () => {
+        syncSummary();
+        void loadPath("destination", false);
+      });
+      els.sourcePrefix.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
-          void loadAwsPath(false);
+          void loadPath("source", false);
         }
       });
-      els.bunnyPrefix.addEventListener("keydown", (event) => {
+      els.destinationPrefix.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
-          void loadBunnyPath();
+          void loadPath("destination", false);
         }
       });
-      els.bunnyPrefix.addEventListener("input", syncSummary);
-      els.awsList.addEventListener("change", (event) => {
+      els.sourceList.addEventListener("change", (event) => {
         const target = event.target;
         if (target instanceof HTMLInputElement && target.dataset.key) {
-          if (target.checked) state.awsSelections.set(target.dataset.key, true);
-          else state.awsSelections.delete(target.dataset.key);
+          if (target.checked) state.sourceSelections.set(target.dataset.key, true);
+          else state.sourceSelections.delete(target.dataset.key);
           syncSummary();
         }
       });
 
-      renderAwsList();
-      renderBunnyList();
+      renderSideList("source");
+      renderSideList("destination");
       renderJobs();
       syncSummary();
       writeUiState();
@@ -909,7 +1071,7 @@ function renderHtml(): string {
       setInterval(() => {
         void refreshJobs();
       }, 5000);
-      log("Enter credentials, load buckets and zones, then browse to the folders you want to migrate.");
+      log("Choose a source and destination provider, then load resources and browse the folders you want to migrate.");
       } catch (error) {
         bootError(errorMessage(error));
       }
@@ -964,15 +1126,18 @@ async function handleBunnyList(request: Request): Promise<Response> {
 
 async function handleTransfer(request: Request, env: AppEnv): Promise<Response> {
   const transfer = parseTransferRequest(await parseJson(request));
-  const zone = await resolveBunnyZone(transfer.bunnyApiKey, transfer.destinationZone);
+  const [source, destination] = await Promise.all([
+    resolveStorageResource(transfer.bunnyApiKey, transfer.source),
+    resolveStorageResource(transfer.bunnyApiKey, transfer.destination),
+  ]);
   const manager = getTransferManagerStub(env);
   const job = await manager.createJob({
     aws: transfer.aws,
-    sourceBucket: transfer.sourceBucket,
+    source,
     sourcePrefix: transfer.sourcePrefix,
     selections: transfer.selections,
     destinationPrefix: transfer.destinationPrefix || "",
-    bunnyZone: zone,
+    destination,
   });
   return json({ job }, { status: 202 });
 }
@@ -1022,6 +1187,12 @@ function parseTransferRequest(body: unknown): TransferRequest {
   const obj = body as Record<string, unknown>;
   const aws = obj.aws as Record<string, unknown> | undefined;
   if (!aws) throw new Error("Missing aws credentials.");
+  const source = parseStorageResource(obj.source, "source");
+  const destination = parseStorageResource(obj.destination, "destination");
+  const bunnyApiKey = typeof obj.bunnyApiKey === "string" ? obj.bunnyApiKey.trim() : "";
+  if ((source.provider === "bunny" || destination.provider === "bunny") && !bunnyApiKey) {
+    throw new Error("Missing bunnyApiKey.");
+  }
   const selections = Array.isArray(obj.selections)
     ? obj.selections.map((selection) => {
         const item = selection as Record<string, unknown>;
@@ -1038,12 +1209,24 @@ function parseTransferRequest(body: unknown): TransferRequest {
       sessionToken: typeof aws.sessionToken === "string" && aws.sessionToken.trim() ? aws.sessionToken.trim() : undefined,
       region: typeof aws.region === "string" && aws.region.trim() ? aws.region.trim() : "us-east-1",
     },
-    sourceBucket: requireString(obj.sourceBucket, "sourceBucket"),
+    bunnyApiKey,
+    source,
     sourcePrefix: typeof obj.sourcePrefix === "string" ? obj.sourcePrefix : "",
     selections,
-    bunnyApiKey: requireString(obj.bunnyApiKey, "bunnyApiKey"),
-    destinationZone: requireString(obj.destinationZone, "destinationZone"),
+    destination,
     destinationPrefix: typeof obj.destinationPrefix === "string" ? obj.destinationPrefix : "",
+  };
+}
+
+function parseStorageResource(value: unknown, label: string): StorageResourceRef {
+  if (!value || typeof value !== "object") throw new Error(`Missing ${label}.`);
+  const obj = value as Record<string, unknown>;
+  const provider = obj.provider === "aws" || obj.provider === "bunny" ? (obj.provider as StorageProvider) : "";
+  if (!provider) throw new Error(`Missing ${label}.provider.`);
+  return {
+    provider,
+    name: requireString(obj.name, `${label}.name`),
+    region: requireString(obj.region, `${label}.region`),
   };
 }
 
@@ -1135,11 +1318,12 @@ async function signedS3RequestToHost(
   path: string,
   query: URLSearchParams,
   body?: BodyInit | null,
+  payloadHashOverride?: string,
 ): Promise<Response> {
   const url = `https://${host}${encodeUrlPath(path)}${query.toString() ? `?${query.toString()}` : ""}`;
   const amzDate = toAmzDate(new Date());
   const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = await sha256Hex(body ?? "");
+  const payloadHash = payloadHashOverride || await sha256Hex(body ?? "");
   const headers = new Headers({
     host,
     "x-amz-date": amzDate,
@@ -1438,10 +1622,11 @@ function bunnyPath(zoneName: string, path: string): string {
 }
 
 async function buildTransferPlan(
+  source: StorageResourceRef,
   aws: AwsCredentials,
-  bucket: string,
   selections: TransferSelection[],
   sourcePrefix: string,
+  bunnyPassword?: string,
 ): Promise<TransferPlanEntry[]> {
   const plan: TransferPlanEntry[] = [];
   for (const selection of selections) {
@@ -1452,7 +1637,9 @@ async function buildTransferPlan(
       continue;
     }
     const prefix = selection.key.endsWith("/") ? selection.key : `${selection.key}/`;
-    const objects = await listAllS3Objects(aws, bucket, prefix);
+    const objects = source.provider === "aws"
+      ? await listAllS3Objects(aws, source.name, prefix)
+      : await listAllBunnyFiles({ ...source, password: bunnyPassword || "" }, prefix);
     for (const object of objects) {
       if (!object.key.endsWith("/")) {
         plan.push({ sourceKey: object.key, destinationKey: relativePathFromPrefix(sourcePrefix, object.key) });
@@ -1483,8 +1670,8 @@ function dedupePlan(plan: TransferPlanEntry[]): TransferPlanEntry[] {
 
 async function executeTransfer(
   aws: AwsCredentials,
-  bucket: string,
-  zone: BunnyZone,
+  source: ResolvedStorageResource,
+  destination: ResolvedStorageResource,
   plan: TransferPlanEntry[],
   destinationPrefix: string,
 ): Promise<{ copied: number; failed: number; errors: string[] }> {
@@ -1493,7 +1680,7 @@ async function executeTransfer(
   const errors: string[] = [];
   for (const entry of plan) {
     try {
-      await copyObject(aws, bucket, zone, entry.sourceKey, destinationPrefix, entry.destinationKey);
+      await copyStorageObject(aws, source, destination, entry.sourceKey, destinationPrefix, entry.destinationKey);
       copied += 1;
     } catch (error) {
       failed += 1;
@@ -1503,43 +1690,158 @@ async function executeTransfer(
   return { copied, failed, errors };
 }
 
-async function copyObject(
+async function copyStorageObject(
   aws: AwsCredentials,
-  bucket: string,
-  zone: BunnyZone,
+  source: ResolvedStorageResource,
+  destination: ResolvedStorageResource,
   sourceKey: string,
   destinationPrefix: string,
   destinationKey: string,
 ): Promise<void> {
-  const sourceResponse = await getS3Object(aws, bucket, sourceKey);
+  const sourceResponse = await readStorageObject(aws, source, sourceKey);
   if (!sourceResponse.ok || !sourceResponse.body) {
     throw new Error(await sourceResponse.text());
   }
   const finalKey = joinPrefix(destinationPrefix, destinationKey);
-  const { path, fileName } = splitDestinationKey(finalKey);
-  const endpoint = bunnyEndpointForRegion(zone.region);
-  const destinationUrl = `https://${endpoint}/${encodeURIComponent(zone.name)}${path ? `/${encodeBunnyPath(path)}` : ""}/${encodeURIComponent(fileName)}`;
-  const upload = await fetch(destinationUrl, {
+  await writeStorageObject(aws, destination, finalKey, sourceResponse.body, sourceResponse.headers.get("content-type") || "application/octet-stream");
+}
+
+async function readStorageObject(aws: AwsCredentials, resource: ResolvedStorageResource, key: string): Promise<Response> {
+  if (resource.provider === "aws") {
+    return getAwsObject(aws, resource.name, resource.region, key);
+  }
+  return getBunnyObject(resource, key);
+}
+
+async function writeStorageObject(
+  aws: AwsCredentials,
+  resource: ResolvedStorageResource,
+  key: string,
+  body: BodyInit | null,
+  contentType: string,
+): Promise<void> {
+  if (resource.provider === "aws") {
+    await putAwsObject(aws, resource.name, resource.region, key, body, contentType);
+    return;
+  }
+  await putBunnyObject(resource, key, body, contentType);
+}
+
+async function getAwsObject(aws: AwsCredentials, bucket: string, region: string, key: string): Promise<Response> {
+  return signedS3RequestToHost(
+    aws,
+    "GET",
+    `s3.${region}.amazonaws.com`,
+    region,
+    `/${bucket}/${key}`,
+    new URLSearchParams(),
+    undefined,
+  );
+}
+
+async function putAwsObject(
+  aws: AwsCredentials,
+  bucket: string,
+  region: string,
+  key: string,
+  body: BodyInit | null,
+  contentType: string,
+): Promise<Response> {
+  const query = new URLSearchParams();
+  const response = await signedS3RequestToHost(
+    aws,
+    "PUT",
+    `s3.${region}.amazonaws.com`,
+    region,
+    `/${bucket}/${key}`,
+    query,
+    body,
+    "UNSIGNED-PAYLOAD",
+  );
+  if (!response.ok && response.status !== 200) {
+    throw new Error(await response.text());
+  }
+  return response;
+}
+
+async function getBunnyObject(resource: ResolvedStorageResource, key: string): Promise<Response> {
+  const endpoint = bunnyEndpointForRegion(resource.region);
+  const response = await fetch(`https://${endpoint}${bunnyObjectPath(resource.name, key)}`, {
+    headers: { AccessKey: resource.password || "" },
+  });
+  return response;
+}
+
+async function putBunnyObject(
+  resource: ResolvedStorageResource,
+  key: string,
+  body: BodyInit | null,
+  contentType: string,
+): Promise<void> {
+  const endpoint = bunnyEndpointForRegion(resource.region);
+  const upload = await fetch(`https://${endpoint}${bunnyObjectPath(resource.name, key)}`, {
     method: "PUT",
     headers: {
-      AccessKey: zone.password || "",
-      "Content-Type": sourceResponse.headers.get("content-type") || "application/octet-stream",
+      AccessKey: resource.password || "",
+      "Content-Type": contentType,
     },
-    body: sourceResponse.body,
+    body,
   });
   if (!upload.ok && upload.status !== 201) {
     throw new Error(await upload.text());
   }
 }
 
-async function getS3Object(aws: AwsCredentials, bucket: string, key: string): Promise<Response> {
-  return signedS3Request(
-    aws,
-    "GET",
-    `/${bucket}/${key}`,
-    new URLSearchParams(),
-    undefined,
-  );
+async function listAllBunnyFiles(resource: ResolvedStorageResource, prefix: string): Promise<S3Item[]> {
+  const items: S3Item[] = [];
+  const seen = new Set<string>();
+  const walk = async (path: string): Promise<void> => {
+    const listed = await listBunnyObjects({ id: 0, name: resource.name, region: resource.region, password: resource.password }, resource.region, path);
+    for (const item of listed) {
+      const itemPath = item.path || joinPrefix(path, item.name);
+      if (item.type === "file") {
+        if (!seen.has(itemPath)) {
+          seen.add(itemPath);
+          items.push({
+            key: itemPath,
+            size: item.size,
+            type: "file",
+            lastModified: item.lastChanged,
+          });
+        }
+        continue;
+      }
+      if (item.type === "folder") {
+        await walk(itemPath);
+      }
+    }
+  };
+  await walk(prefix);
+  return items;
+}
+
+function bunnyObjectPath(zoneName: string, key: string): string {
+  const encodedZone = encodeURIComponent(zoneName);
+  const cleanKey = key
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return cleanKey ? `/${encodedZone}/${cleanKey}` : `/${encodedZone}`;
+}
+
+async function resolveStorageResource(apiKey: string, resource: StorageResourceRef): Promise<ResolvedStorageResource> {
+  if (resource.provider !== "bunny") {
+    return resource;
+  }
+  const zone = await resolveBunnyZone(apiKey, resource.name);
+  return {
+    provider: resource.provider,
+    name: zone.name,
+    region: zone.region || resource.region,
+    password: zone.password,
+  };
 }
 
 async function parseJson(request: Request): Promise<unknown> {
@@ -1636,10 +1938,10 @@ export class TransferManager extends DurableObject<Env> {
       `
         INSERT INTO jobs (
           id, created_at, updated_at, status,
-          source_bucket, source_region,
-          source_prefix,
+          source_provider, source_bucket, source_region,
+          source_prefix, source_resource_password,
           aws_access_key_id, aws_secret_access_key, aws_session_token,
-          destination_zone, destination_zone_region, destination_zone_password,
+          destination_provider, destination_zone, destination_zone_region, destination_zone_password,
           destination_prefix, selections_json,
           current_selection_index, current_folder_prefix, current_folder_page_json, current_folder_continuation_token,
           copied, failed, processed, last_key, last_error, message
@@ -1649,15 +1951,18 @@ export class TransferManager extends DurableObject<Env> {
       now,
       now,
       "queued",
-      input.sourceBucket,
-      input.aws.region,
+      input.source.provider,
+      input.source.name,
+      input.source.region,
       input.sourcePrefix || "",
+      input.source.password || null,
       input.aws.accessKeyId,
       input.aws.secretAccessKey,
       input.aws.sessionToken || null,
-      input.bunnyZone.name,
-      input.bunnyZone.region,
-      input.bunnyZone.password,
+      input.destination.provider,
+      input.destination.name,
+      input.destination.region,
+      input.destination.password || "",
       input.destinationPrefix || "",
       JSON.stringify(input.selections),
       0,
@@ -1765,22 +2070,21 @@ export class TransferManager extends DurableObject<Env> {
       return "done";
     }
 
+    const source = this.rowToResource(job, "source");
+    const destination = this.rowToResource(job, "destination");
+    const aws = {
+      accessKeyId: job.aws_access_key_id,
+      secretAccessKey: job.aws_secret_access_key,
+      sessionToken: job.aws_session_token || undefined,
+      region: job.source_region,
+    };
+
     if (selection.kind === "file") {
       try {
-        await copyObject(
-          {
-            accessKeyId: job.aws_access_key_id,
-            secretAccessKey: job.aws_secret_access_key,
-            sessionToken: job.aws_session_token || undefined,
-            region: job.source_region,
-          },
-          job.source_bucket,
-          {
-            id: 0,
-            name: job.destination_zone,
-            region: job.destination_zone_region,
-            password: job.destination_zone_password,
-          },
+        await copyStorageObject(
+          aws,
+          source,
+          destination,
           selection.key,
           job.destination_prefix,
           relativePathFromPrefix(job.source_prefix, selection.key),
@@ -1817,18 +2121,18 @@ export class TransferManager extends DurableObject<Env> {
     let page = job.current_folder_page_json ? (JSON.parse(job.current_folder_page_json) as TransferJobPageState) : null;
     if (!page) {
       try {
-        const listing = await listAwsObjects(
-          {
-            accessKeyId: job.aws_access_key_id,
-            secretAccessKey: job.aws_secret_access_key,
-            sessionToken: job.aws_session_token || undefined,
-            region: job.source_region,
-          },
-          job.source_bucket,
-          prefix,
-          job.current_folder_continuation_token || undefined,
-          { maxKeys: 100 },
-        );
+        const listing = source.provider === "aws"
+          ? await listAwsObjects(
+              aws,
+              source.name,
+              prefix,
+              job.current_folder_continuation_token || undefined,
+              { maxKeys: 100 },
+            )
+          : {
+              items: await listAllBunnyFiles(source, prefix),
+              nextContinuationToken: null,
+            };
         page = {
           keys: listing.items
             .filter((item) => item.type === "file")
@@ -1897,20 +2201,10 @@ export class TransferManager extends DurableObject<Env> {
     }
 
     try {
-      await copyObject(
-        {
-          accessKeyId: job.aws_access_key_id,
-          secretAccessKey: job.aws_secret_access_key,
-          sessionToken: job.aws_session_token || undefined,
-          region: job.source_region,
-        },
-        job.source_bucket,
-        {
-          id: 0,
-          name: job.destination_zone,
-          region: job.destination_zone_region,
-          password: job.destination_zone_password,
-        },
+      await copyStorageObject(
+        aws,
+        source,
+        destination,
         key,
         job.destination_prefix,
         relativePathFromPrefix(job.source_prefix, key),
@@ -1962,6 +2256,23 @@ export class TransferManager extends DurableObject<Env> {
     return "continue";
   }
 
+  private rowToResource(row: TransferJobRow, side: "source" | "destination"): ResolvedStorageResource {
+    if (side === "source") {
+      return {
+        provider: row.source_provider,
+        name: row.source_bucket,
+        region: row.source_region,
+        password: row.source_resource_password || undefined,
+      };
+    }
+    return {
+      provider: row.destination_provider,
+      name: row.destination_zone,
+      region: row.destination_zone_region,
+      password: row.destination_zone_password || undefined,
+    };
+  }
+
   private handleStepFailure(job: TransferJobRow, key: string, error: unknown): void {
     this.logEvent(job.id, "error", `${key}: ${(error as Error).message}`);
   }
@@ -1988,9 +2299,12 @@ export class TransferManager extends DurableObject<Env> {
     return {
       id: row.id,
       status: row.status,
-      sourceBucket: row.source_bucket,
-      destinationZone: row.destination_zone,
+      sourceProvider: row.source_provider,
+      sourceResource: row.source_bucket,
+      destinationProvider: row.destination_provider,
+      destinationResource: row.destination_zone,
       destinationPrefix: row.destination_prefix,
+      sourcePrefix: row.source_prefix,
       selections: JSON.parse(row.selections_json).length,
       copied: row.copied,
       failed: row.failed,
@@ -2026,3 +2340,5 @@ export class TransferManager extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now() + 1_000);
   }
 }
+
+
