@@ -73,6 +73,7 @@ type TransferRequest = {
   destination: StorageResourceRef;
   destinationPrefix: string;
   conflictMode?: ConflictMode;
+  totalFiles?: number;
   previewOnly?: boolean;
 };
 
@@ -84,6 +85,7 @@ type TransferPlanEntry = {
 type TransferConflictPreview = {
   conflictCount: number;
   conflicts: string[];
+  plannedFiles?: number;
 };
 
 const SAFE_COPY_CONCURRENCY = 4;
@@ -106,6 +108,7 @@ type TransferJobCreateRequest = {
   destinationPrefix: string;
   destination: StorageResourceRef & { password?: string };
   conflictMode?: ConflictMode;
+  totalFiles: number;
 };
 
 type TransferJobSummary = {
@@ -118,6 +121,7 @@ type TransferJobSummary = {
   sourcePrefix: string;
   destinationPrefix: string;
   selections: number;
+  totalFiles: number;
   copied: number;
   skipped: number;
   failed: number;
@@ -164,6 +168,7 @@ type TransferJobRow = {
   destination_zone_password: string;
   destination_prefix: string;
   selections_json: string;
+  total_files: number;
   current_selection_index: number;
   current_folder_prefix: string | null;
   current_folder_page_json: string | null;
@@ -303,7 +308,7 @@ function renderHtml(): string {
     .job-actions{display:flex;justify-content:flex-end;margin-top:8px}
     .log{display:grid;gap:8px;background:rgba(255,255,255,.7);border:1px solid rgba(47,45,41,.12);border-radius:16px;padding:12px;min-height:96px;max-height:240px;overflow-y:auto;font-size:13px;color:var(--muted)}
     .jobs-list{min-height:220px}
-    .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.2fr) 100px 120px minmax(0,1.6fr)}
+    .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.1fr) 96px 84px 112px minmax(0,1.5fr)}
     .error{color:#b42318}
     .dialog-backdrop[hidden]{display:none !important}
     .dialog-backdrop{position:fixed;inset:0;background:rgba(28,24,20,.48);backdrop-filter:blur(10px);display:grid;place-items:center;padding:20px;z-index:9999;pointer-events:auto}
@@ -844,16 +849,17 @@ function renderHtml(): string {
       }
 
       function renderJobs() {
-        const header = '<div class="list-head"><div>Job</div><div>Status</div><div>Progress</div><div>Details</div></div>';
+        const header = '<div class="list-head"><div>Job</div><div>Status</div><div>Files</div><div>Progress</div><div>Details</div></div>';
         const queueNotice = state.transferQueueNotice;
         if (!state.jobs.length) {
-          els.jobsList.innerHTML = header + '<div class="list-row"><div class="meta">No jobs yet.</div><div></div><div></div><div class="meta">Start a transfer to queue one.</div></div>';
+          els.jobsList.innerHTML = header + '<div class="list-row"><div class="meta">No jobs yet.</div><div></div><div></div><div></div><div class="meta">Start a transfer to queue one.</div></div>';
           els.jobsStatus.textContent = queueNotice || "No background jobs running.";
           return;
         }
         els.jobsList.innerHTML = header + state.jobs.map((job) => {
           const statusLabel = job.status === "completed" && job.failed ? "completed with warnings" : job.status;
           const isActive = job.status === "queued" || job.status === "running";
+          const filesLabel = Number.isFinite(job.totalFiles) && job.totalFiles > 0 ? String(job.totalFiles) : "—";
           const progressParts = [];
           if (job.copied) progressParts.push(String(job.copied) + " copied");
           if (job.skipped) progressParts.push(String(job.skipped) + " skipped");
@@ -870,6 +876,7 @@ function renderHtml(): string {
               '<div class="meta">' + route + '</div>' +
             '</div>' +
             '<div class="meta">' + escapeHtml(statusLabel) + '</div>' +
+            '<div class="meta">' + escapeHtml(filesLabel) + '</div>' +
             '<div class="meta">' + escapeHtml(progress) + '</div>' +
             '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + actionButton + '</div>' +
           '</div>';
@@ -1164,6 +1171,7 @@ function renderHtml(): string {
           }
           const conflicts = Array.isArray(preview.payload.conflicts) ? preview.payload.conflicts.map((item) => String(item)) : [];
           const conflictCount = Number(preview.payload.conflictCount || conflicts.length || 0);
+          const totalFiles = Number(preview.payload.plannedFiles || 0);
           const conflictMode = conflictCount > 0 ? await askTransferConflict(conflicts, conflictCount) : "replace";
           if (!conflictMode) {
             setStatus(els.sourceStatus, "Transfer cancelled.");
@@ -1181,6 +1189,7 @@ function renderHtml(): string {
           const queued = await postJson("/api/transfer", {
             ...payload,
             conflictMode,
+            totalFiles,
           });
           state.transferQueueNotice = "";
           log("Job " + queued.job.id + " queued.");
@@ -1458,6 +1467,7 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     const body: TransferConflictPreview = {
       conflictCount: preview.conflicts.length,
       conflicts: preview.conflicts.slice(0, 20),
+      plannedFiles: plan.length,
     };
     return json(body, { status: preview.conflicts.length ? 409 : 200 });
   }
@@ -1470,6 +1480,7 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     destinationPrefix: transfer.destinationPrefix || "",
     destination,
     conflictMode: transfer.conflictMode || "replace",
+    totalFiles: Number.isFinite(transfer.totalFiles) ? Number(transfer.totalFiles) : selections.length,
   });
   return json({ job }, { status: 202 });
 }
@@ -2424,6 +2435,7 @@ export class TransferManager extends DurableObject<Env> {
           destination_zone_password TEXT NOT NULL,
           destination_prefix TEXT NOT NULL,
           selections_json TEXT NOT NULL,
+          total_files INTEGER NOT NULL DEFAULT 0,
           current_selection_index INTEGER NOT NULL DEFAULT 0,
           current_folder_prefix TEXT,
           current_folder_page_json TEXT,
@@ -2456,6 +2468,7 @@ export class TransferManager extends DurableObject<Env> {
       addColumn("destination_zone_password", "destination_zone_password TEXT NOT NULL DEFAULT ''");
       addColumn("destination_prefix", "destination_prefix TEXT NOT NULL DEFAULT ''");
       addColumn("selections_json", "selections_json TEXT NOT NULL DEFAULT '[]'");
+      addColumn("total_files", "total_files INTEGER NOT NULL DEFAULT 0");
       addColumn("current_selection_index", "current_selection_index INTEGER NOT NULL DEFAULT 0");
       addColumn("current_folder_prefix", "current_folder_prefix TEXT");
       addColumn("current_folder_page_json", "current_folder_page_json TEXT");
@@ -2493,10 +2506,10 @@ export class TransferManager extends DurableObject<Env> {
           source_prefix, source_resource_password,
           aws_access_key_id, aws_secret_access_key, aws_session_token,
           destination_provider, destination_zone, destination_zone_region, destination_zone_password,
-          destination_prefix, selections_json,
+          destination_prefix, selections_json, total_files,
           current_selection_index, current_folder_prefix, current_folder_page_json, current_folder_continuation_token,
           copied, skipped, failed, processed, last_key, last_error, message, conflict_mode
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       id,
       now,
@@ -2516,6 +2529,7 @@ export class TransferManager extends DurableObject<Env> {
       input.destination.password || "",
       input.destinationPrefix || "",
       JSON.stringify(input.selections),
+      input.totalFiles,
       0,
       null,
       null,
@@ -2906,6 +2920,7 @@ export class TransferManager extends DurableObject<Env> {
       destinationPrefix: row.destination_prefix,
       sourcePrefix: row.source_prefix,
       selections: JSON.parse(row.selections_json).length,
+      totalFiles: row.total_files,
       copied: row.copied,
       skipped: row.skipped,
       failed: row.failed,
