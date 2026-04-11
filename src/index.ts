@@ -2213,15 +2213,37 @@ export class TransferManager extends DurableObject<Env> {
         )
       `);
       const columns = this.ctx.storage.sql.exec<{ name: string }>(`PRAGMA table_info(jobs)`).toArray();
-      if (!columns.some((column) => column.name === "source_prefix")) {
-        this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN source_prefix TEXT NOT NULL DEFAULT ''`);
-      }
-      if (!columns.some((column) => column.name === "skipped")) {
-        this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0`);
-      }
-      if (!columns.some((column) => column.name === "conflict_mode")) {
-        this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN conflict_mode TEXT NOT NULL DEFAULT 'replace'`);
-      }
+      const addColumn = (name: string, definition: string) => {
+        if (!columns.some((column) => column.name === name)) {
+          this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN ${definition}`);
+        }
+      };
+      addColumn("source_provider", "source_provider TEXT NOT NULL DEFAULT 'aws'");
+      addColumn("source_bucket", "source_bucket TEXT NOT NULL DEFAULT ''");
+      addColumn("source_region", "source_region TEXT NOT NULL DEFAULT 'us-east-1'");
+      addColumn("source_prefix", "source_prefix TEXT NOT NULL DEFAULT ''");
+      addColumn("source_resource_password", "source_resource_password TEXT");
+      addColumn("aws_access_key_id", "aws_access_key_id TEXT NOT NULL DEFAULT ''");
+      addColumn("aws_secret_access_key", "aws_secret_access_key TEXT NOT NULL DEFAULT ''");
+      addColumn("aws_session_token", "aws_session_token TEXT");
+      addColumn("destination_provider", "destination_provider TEXT NOT NULL DEFAULT 'bunny'");
+      addColumn("destination_zone", "destination_zone TEXT NOT NULL DEFAULT ''");
+      addColumn("destination_zone_region", "destination_zone_region TEXT NOT NULL DEFAULT ''");
+      addColumn("destination_zone_password", "destination_zone_password TEXT NOT NULL DEFAULT ''");
+      addColumn("destination_prefix", "destination_prefix TEXT NOT NULL DEFAULT ''");
+      addColumn("selections_json", "selections_json TEXT NOT NULL DEFAULT '[]'");
+      addColumn("current_selection_index", "current_selection_index INTEGER NOT NULL DEFAULT 0");
+      addColumn("current_folder_prefix", "current_folder_prefix TEXT");
+      addColumn("current_folder_page_json", "current_folder_page_json TEXT");
+      addColumn("current_folder_continuation_token", "current_folder_continuation_token TEXT");
+      addColumn("copied", "copied INTEGER NOT NULL DEFAULT 0");
+      addColumn("skipped", "skipped INTEGER NOT NULL DEFAULT 0");
+      addColumn("failed", "failed INTEGER NOT NULL DEFAULT 0");
+      addColumn("processed", "processed INTEGER NOT NULL DEFAULT 0");
+      addColumn("last_key", "last_key TEXT");
+      addColumn("last_error", "last_error TEXT");
+      addColumn("message", "message TEXT");
+      addColumn("conflict_mode", "conflict_mode TEXT NOT NULL DEFAULT 'replace'");
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS job_events (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
