@@ -505,7 +505,7 @@ function renderHtml(): string {
         destinationContinuationToken: null,
         jobs: [],
       };
-      let conflictDialogResolve: ((value: ConflictMode | null) => void) | null = null;
+      let conflictDialogResolve = null;
 
       function escapeHtml(value) {
         return String(value)
