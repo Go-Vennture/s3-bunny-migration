@@ -246,6 +246,7 @@ function renderHtml(): string {
     .statusbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
     .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);background:rgba(255,255,255,.72);border-radius:999px;padding:9px 14px;font-size:13px;color:var(--muted)}
     .pill strong{color:var(--text)}
+    .clear-credentials{display:inline-flex;align-items:center;justify-content:center;min-height:unset;padding:9px 14px;border-radius:999px;background:rgba(255,255,255,.84);color:var(--text);border:1px solid rgba(47,45,41,.16);font-size:13px;font-weight:700}
     .layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
     .contents-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:stretch;margin-top:18px}
     .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(16px);overflow:hidden}
@@ -320,7 +321,7 @@ function renderHtml(): string {
       <div class="statusbar">
         <span class="pill"><strong>Source</strong> AWS S3</span>
         <span class="pill"><strong>Destination</strong> Bunny Storage</span>
-        <span class="pill">Bunny account API key is used to discover zones and resolve the storage password</span>
+        <button class="clear-credentials" id="clearCredentials" type="button">Clear credentials</button>
       </div>
     </header>
 
@@ -345,9 +346,6 @@ function renderHtml(): string {
         </div>
         <div class="panel-body">
           <div class="field"><label for="bunnyApiKey">Bunny account API key</label><input id="bunnyApiKey" type="password" autocomplete="off" spellcheck="false" /></div>
-          <div class="credential-actions">
-            <button class="ghost" id="clearCredentials" type="button">Clear credentials</button>
-          </div>
         </div>
       </article>
     </section>
