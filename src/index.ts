@@ -657,7 +657,11 @@ function renderHtml(): string {
       function populateResourceSelect(side, resources) {
         const elements = sideElements(side);
         const provider = selectedProvider(side);
-        const previous = elements.resourceSelect.value.trim();
+        const saved = readUiState();
+        const persisted = side === "source"
+          ? String(saved.sourceResource || saved.awsBucketSelect || "").trim()
+          : String(saved.destinationResource || saved.bunnyZoneSelect || "").trim();
+        const previous = elements.resourceSelect.value.trim() || persisted;
         if (!resources.length) {
           elements.resourceSelect.innerHTML = '<option value="">' + (provider === "aws" ? "No buckets returned" : "No storage zones returned") + '</option>';
           elements.resourceSelect.value = "";
@@ -671,6 +675,12 @@ function renderHtml(): string {
         } else {
           elements.resourceSelect.value = resources[0].name;
         }
+      }
+
+      function sortResources(resources) {
+        return Array.isArray(resources)
+          ? resources.slice().sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")))
+          : [];
       }
 
       function normalizeAwsItems(items) {
@@ -797,7 +807,7 @@ function renderHtml(): string {
               accessKeyId: els.awsAccessKeyId.value.trim(),
               secretAccessKey: els.awsSecretAccessKey.value.trim(),
             });
-            state.awsBuckets = Array.isArray(payload.buckets) ? payload.buckets : [];
+            state.awsBuckets = sortResources(Array.isArray(payload.buckets) ? payload.buckets : []);
             ["source", "destination"].forEach((targetSide) => {
               if (selectedProvider(targetSide) === "aws") {
                 populateResourceSelect(targetSide, state.awsBuckets);
@@ -821,7 +831,7 @@ function renderHtml(): string {
         setStatus(elements.status, "Loading zones...");
         try {
           const payload = await postJson("/api/bunny/zones", { apiKey: els.bunnyApiKey.value.trim() });
-          state.bunnyZones = Array.isArray(payload.zones) ? payload.zones : [];
+          state.bunnyZones = sortResources(Array.isArray(payload.zones) ? payload.zones : []);
           ["source", "destination"].forEach((targetSide) => {
             if (selectedProvider(targetSide) === "bunny") {
               populateResourceSelect(targetSide, state.bunnyZones);
@@ -1597,7 +1607,11 @@ async function listBunnyObjects(zone: BunnyZone, region: string, path: string): 
   return rawItems
     .map((item) => ({
       name: String((item as Record<string, unknown>).ObjectName || item.name || ""),
-      path: String((item as Record<string, unknown>).Path || item.path || ""),
+      path: bunnyObjectKey(
+        String((item as Record<string, unknown>).Path || item.path || ""),
+        String((item as Record<string, unknown>).ObjectName || item.name || ""),
+        (((item as Record<string, unknown>).IsDirectory || item.type) ? "folder" : "file") as BunnyItem["type"],
+      ),
       type: (((item as Record<string, unknown>).IsDirectory || item.type) ? "folder" : "file") as BunnyItem["type"],
       size: Number((item as Record<string, unknown>).Length || item.size || 0),
       lastChanged: String((item as Record<string, unknown>).LastChanged || item.lastChanged || ""),
@@ -1619,6 +1633,22 @@ function bunnyPath(zoneName: string, path: string): string {
     .map((segment) => encodeURIComponent(segment))
     .join("/");
   return cleanPath ? `/${encodedZone}/${cleanPath}/` : `/${encodedZone}/`;
+}
+
+function bunnyObjectKey(path: string, name: string, type: BunnyItem["type"]): string {
+  const cleanPath = path
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
+  const cleanName = name
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
+  const key = cleanPath && cleanName ? `${cleanPath}/${cleanName}` : cleanPath || cleanName;
+  if (!key) return "";
+  return type === "folder" && !key.endsWith("/") ? `${key}/` : key;
 }
 
 async function buildTransferPlan(
