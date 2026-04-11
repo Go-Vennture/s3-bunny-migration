@@ -1416,7 +1416,10 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
   const selections = normalizeTransferSelections(transfer.selections);
   if (transfer.previewOnly) {
     const plan = await buildTransferPlan(source, transfer.aws, selections, transfer.sourcePrefix);
-    const preview = await detectTransferConflicts(transfer.aws, destination, plan, transfer.destinationPrefix);
+    const destinationHasContents = await storageResourceHasContents(transfer.aws, destination, transfer.destinationPrefix);
+    const preview = destinationHasContents
+      ? await detectTransferConflicts(transfer.aws, destination, plan, transfer.destinationPrefix)
+      : { conflictCount: 0, conflicts: [] as string[] };
     const body: TransferConflictPreview = {
       conflictCount: preview.conflicts.length,
       conflicts: preview.conflicts.slice(0, 20),
@@ -1998,6 +2001,25 @@ async function detectTransferConflicts(
     conflictCount: conflicts.length,
     conflicts,
   };
+}
+
+async function storageResourceHasContents(
+  aws: AwsCredentials,
+  resource: ResolvedStorageResource,
+  prefix: string,
+): Promise<boolean> {
+  if (resource.provider === "aws") {
+    const page = await listAwsObjects(aws, resource.name, prefix, undefined, { maxKeys: 1 });
+    return page.items.length > 0;
+  }
+  const bunnyZone: BunnyZone = {
+    id: 0,
+    name: resource.name,
+    region: resource.region,
+    password: resource.password,
+  };
+  const items = await listBunnyObjects(bunnyZone, resource.region, prefix);
+  return items.length > 0;
 }
 
 function relativePathFromPrefix(prefix: string, key: string): string {
