@@ -671,6 +671,7 @@ function renderHtml(): string {
         els.destinationPrefix.value = saved.destinationPrefix || saved.bunnyPrefix || "";
         const selections = Array.isArray(saved.sourceSelections) ? saved.sourceSelections : Array.isArray(saved.awsSelections) ? saved.awsSelections : [];
         state.sourceSelections = new Map(selections.map((key) => [String(key), true]));
+        writeUiState();
       }
 
       function setStatus(target, message, kind = "info") {
@@ -715,6 +716,7 @@ function renderHtml(): string {
         } else {
           elements.resourceSelect.value = resources[0].name;
         }
+        writeUiState();
       }
 
       function sortResources(resources) {
@@ -802,6 +804,7 @@ function renderHtml(): string {
             const key = button.dataset.open || "";
             if (key.endsWith("/")) {
               elements.prefix.value = key;
+              writeUiState();
               loadPath(side, false);
             }
           });
@@ -1164,11 +1167,13 @@ function renderHtml(): string {
       els.sourceUp.addEventListener("click", () => {
         els.sourcePrefix.value = parentPrefix(els.sourcePrefix.value);
         syncSummary();
+        writeUiState();
         loadPath("source", false);
       });
       els.destinationUp.addEventListener("click", () => {
         els.destinationPrefix.value = parentPrefix(els.destinationPrefix.value);
         syncSummary();
+        writeUiState();
         loadPath("destination", false);
       });
       els.sourceProviderSelect.addEventListener("change", () => {
@@ -1191,18 +1196,22 @@ function renderHtml(): string {
       els.sourceResourceSelect.addEventListener("change", () => {
         state.sourceSelections.clear();
         syncSummary();
+        writeUiState();
         void loadPath("source", false);
       });
       els.destinationResourceSelect.addEventListener("change", () => {
         syncSummary();
+        writeUiState();
         void loadPath("destination", false);
       });
       els.sourcePrefix.addEventListener("change", () => {
         syncSummary();
+        writeUiState();
         void loadPath("source", false);
       });
       els.destinationPrefix.addEventListener("change", () => {
         syncSummary();
+        writeUiState();
         void loadPath("destination", false);
       });
       els.sourcePrefix.addEventListener("keydown", (event) => {
@@ -1225,6 +1234,8 @@ function renderHtml(): string {
           syncSummary();
         }
       });
+      window.addEventListener("pagehide", writeUiState);
+      window.addEventListener("beforeunload", writeUiState);
 
       renderSideList("source");
       renderSideList("destination");
