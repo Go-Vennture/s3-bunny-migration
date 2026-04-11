@@ -207,11 +207,11 @@ export default {
       if (request.method === "GET" && url.pathname === "/favicon.ico") return faviconResponse();
       if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
       if (request.method === "POST" && url.pathname === "/api/aws/buckets") return json({ buckets: await listAwsBuckets(await parseAwsCredentials(request)) });
-      if (request.method === "POST" && url.pathname === "/api/aws/list") return handleAwsList(request);
-      if (request.method === "POST" && url.pathname === "/api/bunny/zones") return handleBunnyZones(request);
-      if (request.method === "POST" && url.pathname === "/api/bunny/list") return handleBunnyList(request);
-      if (request.method === "POST" && url.pathname === "/api/transfer") return handleTransfer(request, env);
-      if (request.method === "GET" && url.pathname === "/api/jobs") return handleJobs(request, env);
+      if (request.method === "POST" && url.pathname === "/api/aws/list") return await handleAwsList(request);
+      if (request.method === "POST" && url.pathname === "/api/bunny/zones") return await handleBunnyZones(request);
+      if (request.method === "POST" && url.pathname === "/api/bunny/list") return await handleBunnyList(request);
+      if (request.method === "POST" && url.pathname === "/api/transfer") return await handleTransfer(request, env);
+      if (request.method === "GET" && url.pathname === "/api/jobs") return await handleJobs(request, env);
       return new Response("Not found", { status: 404 });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
