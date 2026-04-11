@@ -19,6 +19,8 @@ type AwsBucket = S3Bucket & {
 
 type StorageProvider = "aws" | "bunny";
 
+type ConflictMode = "replace" | "new";
+
 type StorageResourceRef = {
   provider: StorageProvider;
   name: string;
@@ -70,11 +72,18 @@ type TransferRequest = {
   selections: TransferSelection[];
   destination: StorageResourceRef;
   destinationPrefix: string;
+  conflictMode?: ConflictMode;
+  previewOnly?: boolean;
 };
 
 type TransferPlanEntry = {
   sourceKey: string;
   destinationKey: string;
+};
+
+type TransferConflictPreview = {
+  conflictCount: number;
+  conflicts: string[];
 };
 
 type ResolvedBunnyZone = BunnyZone & {
@@ -94,6 +103,7 @@ type TransferJobCreateRequest = {
   selections: TransferJobSelection[];
   destinationPrefix: string;
   destination: StorageResourceRef & { password?: string };
+  conflictMode?: ConflictMode;
 };
 
 type TransferJobSummary = {
@@ -107,6 +117,7 @@ type TransferJobSummary = {
   destinationPrefix: string;
   selections: number;
   copied: number;
+  skipped: number;
   failed: number;
   processed: number;
   lastKey?: string;
@@ -156,11 +167,13 @@ type TransferJobRow = {
   current_folder_page_json: string | null;
   current_folder_continuation_token: string | null;
   copied: number;
+  skipped: number;
   failed: number;
   processed: number;
   last_key: string | null;
   last_error: string | null;
   message: string | null;
+  conflict_mode: ConflictMode;
 };
 
 const REGION_ENDPOINTS: Record<string, string> = {
@@ -280,6 +293,13 @@ function renderHtml(): string {
     .jobs-list{min-height:220px}
     .jobs-list .list-head,.jobs-list .list-row{grid-template-columns:minmax(140px,1.2fr) 100px 120px minmax(0,1.6fr)}
     .error{color:#b42318}
+    .dialog-backdrop{position:fixed;inset:0;background:rgba(28,24,20,.48);backdrop-filter:blur(10px);display:grid;place-items:center;padding:20px;z-index:40}
+    .dialog-card{width:min(560px,100%);background:#fff;border:1px solid rgba(47,45,41,.12);border-radius:24px;box-shadow:0 24px 80px rgba(28,24,20,.24);padding:20px;display:grid;gap:14px}
+    .dialog-card h3{margin:0;font-size:20px}
+    .dialog-card p{margin:0;color:var(--muted);line-height:1.5}
+    .dialog-list{display:grid;gap:6px;max-height:220px;overflow-y:auto;border:1px solid rgba(47,45,41,.08);border-radius:16px;padding:12px;background:rgba(244,241,234,.42);font-size:13px;color:var(--text)}
+    .dialog-actions{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end}
+    .dialog-actions .ghost,.dialog-actions .secondary{min-height:42px}
     @media (max-width:1100px){.layout,.contents-layout{grid-template-columns:1fr}}
     @media (max-width:720px){.grid-2{grid-template-columns:1fr}.list-head,.list-row{grid-template-columns:34px minmax(0,1fr) 86px}.size-col{display:none}}
   </style>
@@ -402,6 +422,18 @@ function renderHtml(): string {
       </div>
     </section>
   </div>
+  <div class="dialog-backdrop" id="conflictDialog" hidden>
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="conflictDialogTitle">
+      <h3 id="conflictDialogTitle">Existing items found</h3>
+      <p id="conflictDialogMessage"></p>
+      <div class="dialog-list" id="conflictDialogList"></div>
+      <div class="dialog-actions">
+        <button class="secondary" id="conflictReplace">Replace existing</button>
+        <button class="secondary" id="conflictNew">Copy only new</button>
+        <button class="ghost" id="conflictCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     (() => {
@@ -452,6 +484,12 @@ function renderHtml(): string {
         log: $("log"),
         jobsList: $("jobsList"),
         jobsStatus: $("jobsStatus"),
+        conflictDialog: $("conflictDialog"),
+        conflictDialogMessage: $("conflictDialogMessage"),
+        conflictDialogList: $("conflictDialogList"),
+        conflictReplace: $("conflictReplace"),
+        conflictNew: $("conflictNew"),
+        conflictCancel: $("conflictCancel"),
       };
 
       const STORAGE_KEY = "s3-bunny-migration:ui-state:v3";
@@ -781,9 +819,13 @@ function renderHtml(): string {
         }
         els.jobsList.innerHTML = header + state.jobs.map((job) => {
           const statusLabel = job.status === "completed" && job.failed ? "completed with warnings" : job.status;
+          const progressParts = [];
+          if (job.copied) progressParts.push(String(job.copied) + " copied");
+          if (job.skipped) progressParts.push(String(job.skipped) + " skipped");
+          if (job.failed) progressParts.push(String(job.failed) + " failed");
           const progress = job.status === "completed"
-            ? (job.failed ? String(job.copied) + " copied / " + String(job.failed) + " warning(s)" : String(job.copied) + " copied")
-            : String(job.copied) + " copied / " + String(job.failed) + " failed";
+            ? (progressParts.length ? progressParts.join(" / ") : "Completed")
+            : (progressParts.length ? progressParts.join(" / ") : "Running");
           const details = job.lastKey ? escapeHtml(job.lastKey) : escapeHtml(job.message || "");
           const route = providerLabel(job.sourceProvider) + " " + escapeHtml(job.sourceResource) + " -> " + providerLabel(job.destinationProvider) + " " + escapeHtml(job.destinationResource);
           return '<div class="list-row">' +
@@ -800,17 +842,66 @@ function renderHtml(): string {
         els.jobsStatus.textContent = running ? "Latest active job: " + running.id : "No active jobs.";
       }
 
-      async function postJson(path, body) {
+      async function postJsonResponse(path, body) {
         const response = await fetch(path, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         });
         const payload = await response.json().catch(() => ({}));
+        return { response, payload };
+      }
+
+      async function postJson(path, body) {
+        const { response, payload } = await postJsonResponse(path, body);
         if (!response.ok) {
           throw new Error(payload && payload.error ? payload.error : response.statusText || "Request failed");
         }
         return payload;
+      }
+
+      function renderConflictList(conflicts, total) {
+        const visible = conflicts.slice(0, 8);
+        const overflow = total > visible.length ? '<div class="meta">And ' + String(total - visible.length) + ' more.</div>' : "";
+        return visible.map((item) => "<div>" + escapeHtml(item) + "</div>").join("") + overflow;
+      }
+
+      function askTransferConflict(conflicts, total) {
+        return new Promise((resolve) => {
+          if (!els.conflictDialog || !els.conflictDialogMessage || !els.conflictDialogList) {
+            resolve("replace");
+            return;
+          }
+          const cleanup = () => {
+            els.conflictDialog.hidden = true;
+            document.removeEventListener("keydown", onKeyDown);
+            els.conflictReplace.removeEventListener("click", onReplace);
+            els.conflictNew.removeEventListener("click", onNewOnly);
+            els.conflictCancel.removeEventListener("click", onCancel);
+            document.body.style.overflow = "";
+          };
+          const finish = (value) => {
+            cleanup();
+            resolve(value);
+          };
+          const onReplace = () => finish("replace");
+          const onNewOnly = () => finish("new");
+          const onCancel = () => finish(null);
+          const onKeyDown = (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              finish(null);
+            }
+          };
+          els.conflictDialogMessage.textContent = String(total) + " matching file" + (total === 1 ? "" : "s") + " already exist in the destination. Choose how to continue.";
+          els.conflictDialogList.innerHTML = renderConflictList(conflicts, total);
+          els.conflictDialog.hidden = false;
+          document.body.style.overflow = "hidden";
+          document.addEventListener("keydown", onKeyDown);
+          els.conflictReplace.addEventListener("click", onReplace);
+          els.conflictNew.addEventListener("click", onNewOnly);
+          els.conflictCancel.addEventListener("click", onCancel);
+        });
       }
 
       async function loadResources(side) {
@@ -952,11 +1043,11 @@ function renderHtml(): string {
           return;
         }
         els.transferButton.disabled = true;
-        setStatus(els.sourceStatus, "Queueing background job...");
-        setStatus(els.destinationStatus, "Queueing background job...");
-        log("Queueing transfer of " + String(selections.length) + " selected item(s).");
+        setStatus(els.sourceStatus, "Checking destination for conflicts...");
+        setStatus(els.destinationStatus, "Checking destination for conflicts...");
+        log("Checking transfer of " + String(selections.length) + " selected item(s).");
         try {
-          const payload = await postJson("/api/transfer", {
+          const payload = {
             aws: {
               accessKeyId: els.awsAccessKeyId.value.trim(),
               secretAccessKey: els.awsSecretAccessKey.value.trim(),
@@ -976,10 +1067,33 @@ function renderHtml(): string {
               region: destinationResource.region,
             },
             destinationPrefix: ensureTrailingSlash(els.destinationPrefix.value),
+          };
+          const preview = await postJsonResponse("/api/transfer", {
+            ...payload,
+            previewOnly: true,
           });
-          log("Job " + payload.job.id + " queued.");
-          setStatus(els.sourceStatus, "Job queued: " + payload.job.id);
-          setStatus(els.destinationStatus, "Job queued: " + payload.job.id);
+          if (!preview.response.ok && preview.response.status !== 409) {
+            throw new Error(preview.payload && preview.payload.error ? preview.payload.error : preview.response.statusText || "Request failed");
+          }
+          const conflicts = Array.isArray(preview.payload.conflicts) ? preview.payload.conflicts.map((item) => String(item)) : [];
+          const conflictCount = Number(preview.payload.conflictCount || conflicts.length || 0);
+          const conflictMode = conflictCount > 0 ? await askTransferConflict(conflicts, conflictCount) : "replace";
+          if (!conflictMode) {
+            setStatus(els.sourceStatus, "Transfer cancelled.");
+            setStatus(els.destinationStatus, "Transfer cancelled.");
+            log("Transfer cancelled.");
+            return;
+          }
+          setStatus(els.sourceStatus, "Queueing background job...");
+          setStatus(els.destinationStatus, "Queueing background job...");
+          log("Queueing transfer of " + String(selections.length) + " selected item(s).");
+          const queued = await postJson("/api/transfer", {
+            ...payload,
+            conflictMode,
+          });
+          log("Job " + queued.job.id + " queued.");
+          setStatus(els.sourceStatus, "Job queued: " + queued.job.id);
+          setStatus(els.destinationStatus, "Job queued: " + queued.job.id);
           await refreshJobs();
         } catch (error) {
           log(errorMessage(error), "error");
@@ -1160,6 +1274,15 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     resolveStorageResource(transfer.bunnyApiKey, transfer.source),
     resolveStorageResource(transfer.bunnyApiKey, transfer.destination),
   ]);
+  if (transfer.previewOnly) {
+    const plan = await buildTransferPlan(source, transfer.aws, transfer.selections, transfer.sourcePrefix);
+    const preview = await detectTransferConflicts(transfer.aws, destination, plan, transfer.destinationPrefix);
+    const body: TransferConflictPreview = {
+      conflictCount: preview.conflicts.length,
+      conflicts: preview.conflicts.slice(0, 20),
+    };
+    return json(body, { status: preview.conflicts.length ? 409 : 200 });
+  }
   const manager = getTransferManagerStub(env);
   const job = await manager.createJob({
     aws: transfer.aws,
@@ -1168,6 +1291,7 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     selections: transfer.selections,
     destinationPrefix: transfer.destinationPrefix || "",
     destination,
+    conflictMode: transfer.conflictMode || "replace",
   });
   return json({ job }, { status: 202 });
 }
@@ -1245,6 +1369,8 @@ function parseTransferRequest(body: unknown): TransferRequest {
     selections,
     destination,
     destinationPrefix: typeof obj.destinationPrefix === "string" ? obj.destinationPrefix : "",
+    conflictMode: obj.conflictMode === "new" ? "new" : "replace",
+    previewOnly: obj.previewOnly === true,
   };
 }
 
@@ -1657,41 +1783,33 @@ function bunnyPath(zoneName: string, path: string): string {
 }
 
 function bunnyObjectKey(zoneName: string, path: string, name: string, type: BunnyItem["type"]): string {
-  const cleanPath = normalizeBunnyRelativePath(zoneName, path);
-  const cleanName = name
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .join("/");
-  const key = cleanPath && cleanName ? `${cleanPath}/${cleanName}` : cleanPath || cleanName;
+  const zoneKey = normalizeBunnyKey(zoneName);
+  const cleanPath = normalizeBunnyKey(path);
+  const cleanName = normalizeBunnyKey(name);
+  let key = cleanPath && cleanName ? `${cleanPath}/${cleanName}` : cleanPath || cleanName;
+  if (zoneKey && key) {
+    const zonePrefix = `${zoneKey}/`;
+    while (key === zoneKey || key.startsWith(zonePrefix)) {
+      key = key === zoneKey ? "" : key.slice(zonePrefix.length);
+    }
+  }
   if (!key) return "";
   return type === "folder" && !key.endsWith("/") ? `${key}/` : key;
 }
 
-function normalizeBunnyRelativePath(zoneName: string, path: string): string {
-  const parts = String(path || "")
+function normalizeBunnyKey(value: string): string {
+  return String(value || "")
     .split("/")
     .map((segment) => segment.trim())
-    .filter(Boolean);
-  const zoneParts = String(zoneName || "")
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  if (zoneParts.length && parts.length >= zoneParts.length) {
-    const prefix = parts.slice(0, zoneParts.length).join("/");
-    if (prefix === zoneParts.join("/")) {
-      parts.splice(0, zoneParts.length);
-    }
-  }
-  return parts.join("/");
+    .filter(Boolean)
+    .join("/");
 }
 
 async function buildTransferPlan(
-  source: StorageResourceRef,
+  source: ResolvedStorageResource,
   aws: AwsCredentials,
   selections: TransferSelection[],
   sourcePrefix: string,
-  bunnyPassword?: string,
 ): Promise<TransferPlanEntry[]> {
   const plan: TransferPlanEntry[] = [];
   for (const selection of selections) {
@@ -1704,7 +1822,7 @@ async function buildTransferPlan(
     const prefix = selection.key.endsWith("/") ? selection.key : `${selection.key}/`;
     const objects = source.provider === "aws"
       ? await listAllS3Objects(aws, source.name, prefix)
-      : await listAllBunnyFiles({ ...source, password: bunnyPassword || "" }, prefix);
+      : await listAllBunnyFiles(source, prefix);
     for (const object of objects) {
       if (!object.key.endsWith("/")) {
         plan.push({ sourceKey: object.key, destinationKey: relativePathFromPrefix(sourcePrefix, object.key) });
@@ -1712,6 +1830,25 @@ async function buildTransferPlan(
     }
   }
   return dedupePlan(plan);
+}
+
+async function detectTransferConflicts(
+  aws: AwsCredentials,
+  destination: ResolvedStorageResource,
+  plan: TransferPlanEntry[],
+  destinationPrefix: string,
+): Promise<TransferConflictPreview> {
+  const conflicts: string[] = [];
+  for (const entry of plan) {
+    const destinationKey = joinPrefix(destinationPrefix, entry.destinationKey);
+    if (await storageObjectExists(aws, destination, destinationKey)) {
+      conflicts.push(destinationKey);
+    }
+  }
+  return {
+    conflictCount: conflicts.length,
+    conflicts,
+  };
 }
 
 function relativePathFromPrefix(prefix: string, key: string): string {
@@ -1739,14 +1876,17 @@ async function executeTransfer(
   destination: ResolvedStorageResource,
   plan: TransferPlanEntry[],
   destinationPrefix: string,
+  conflictMode: ConflictMode,
 ): Promise<{ copied: number; failed: number; errors: string[] }> {
   let copied = 0;
   let failed = 0;
   const errors: string[] = [];
   for (const entry of plan) {
     try {
-      await copyStorageObject(aws, source, destination, entry.sourceKey, destinationPrefix, entry.destinationKey);
-      copied += 1;
+      const outcome = await copyStorageObject(aws, source, destination, entry.sourceKey, destinationPrefix, entry.destinationKey, conflictMode);
+      if (outcome === "copied") {
+        copied += 1;
+      }
     } catch (error) {
       failed += 1;
       errors.push(`${entry.sourceKey}: ${(error as Error).message}`);
@@ -1762,13 +1902,18 @@ async function copyStorageObject(
   sourceKey: string,
   destinationPrefix: string,
   destinationKey: string,
-): Promise<void> {
+  conflictMode: ConflictMode,
+): Promise<"copied" | "skipped"> {
+  const finalKey = joinPrefix(destinationPrefix, destinationKey);
+  if (conflictMode === "new" && await storageObjectExists(aws, destination, finalKey)) {
+    return "skipped";
+  }
   const sourceResponse = await readStorageObject(aws, source, sourceKey);
   if (!sourceResponse.ok || !sourceResponse.body) {
     throw new Error(await sourceResponse.text());
   }
-  const finalKey = joinPrefix(destinationPrefix, destinationKey);
   await writeStorageObject(aws, destination, finalKey, sourceResponse.body, sourceResponse.headers.get("content-type") || "application/octet-stream");
+  return "copied";
 }
 
 async function readStorageObject(aws: AwsCredentials, resource: ResolvedStorageResource, key: string): Promise<Response> {
@@ -1776,6 +1921,13 @@ async function readStorageObject(aws: AwsCredentials, resource: ResolvedStorageR
     return getAwsObject(aws, resource.name, resource.region, key);
   }
   return getBunnyObject(resource, key);
+}
+
+async function storageObjectExists(aws: AwsCredentials, resource: ResolvedStorageResource, key: string): Promise<boolean> {
+  if (resource.provider === "aws") {
+    return awsObjectExists(aws, resource.name, resource.region, key);
+  }
+  return bunnyObjectExists(resource, key);
 }
 
 async function writeStorageObject(
@@ -1802,6 +1954,19 @@ async function getAwsObject(aws: AwsCredentials, bucket: string, region: string,
     new URLSearchParams(),
     undefined,
   );
+}
+
+async function awsObjectExists(aws: AwsCredentials, bucket: string, region: string, key: string): Promise<boolean> {
+  const response = await signedS3RequestToHost(
+    aws,
+    "HEAD",
+    `s3.${region}.amazonaws.com`,
+    region,
+    `/${bucket}/${key}`,
+    new URLSearchParams(),
+    undefined,
+  );
+  return response.ok;
 }
 
 async function putAwsObject(
@@ -1835,6 +2000,15 @@ async function getBunnyObject(resource: ResolvedStorageResource, key: string): P
     headers: { AccessKey: resource.password || "" },
   });
   return response;
+}
+
+async function bunnyObjectExists(resource: ResolvedStorageResource, key: string): Promise<boolean> {
+  const endpoint = bunnyEndpointForRegion(resource.region);
+  const response = await fetch(`https://${endpoint}${bunnyObjectPath(resource.name, key)}`, {
+    method: "HEAD",
+    headers: { AccessKey: resource.password || "" },
+  });
+  return response.ok;
 }
 
 async function putBunnyObject(
@@ -1982,6 +2156,12 @@ export class TransferManager extends DurableObject<Env> {
       if (!columns.some((column) => column.name === "source_prefix")) {
         this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN source_prefix TEXT NOT NULL DEFAULT ''`);
       }
+      if (!columns.some((column) => column.name === "skipped")) {
+        this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0`);
+      }
+      if (!columns.some((column) => column.name === "conflict_mode")) {
+        this.ctx.storage.sql.exec(`ALTER TABLE jobs ADD COLUMN conflict_mode TEXT NOT NULL DEFAULT 'replace'`);
+      }
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS job_events (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2009,8 +2189,8 @@ export class TransferManager extends DurableObject<Env> {
           destination_provider, destination_zone, destination_zone_region, destination_zone_password,
           destination_prefix, selections_json,
           current_selection_index, current_folder_prefix, current_folder_page_json, current_folder_continuation_token,
-          copied, failed, processed, last_key, last_error, message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          copied, skipped, failed, processed, last_key, last_error, message, conflict_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       id,
       now,
@@ -2037,9 +2217,11 @@ export class TransferManager extends DurableObject<Env> {
       0,
       0,
       0,
+      0,
       null,
       null,
       "Queued for transfer",
+      input.conflictMode || "replace",
     );
     this.logEvent(id, "info", "Job queued");
     await this.schedule();
@@ -2143,28 +2325,36 @@ export class TransferManager extends DurableObject<Env> {
       sessionToken: job.aws_session_token || undefined,
       region: job.source_region,
     };
+    const conflictMode = job.conflict_mode === "new" ? "new" : "replace";
 
     if (selection.kind === "file") {
       try {
-        await copyStorageObject(
+        const outcome = await copyStorageObject(
           aws,
           source,
           destination,
           selection.key,
           job.destination_prefix,
           relativePathFromPrefix(job.source_prefix, selection.key),
+          conflictMode,
         );
-        this.updateJob(job.id, {
-          copied: job.copied + 1,
+        const patch: Partial<TransferJobRow> = {
           processed: job.processed + 1,
           current_selection_index: job.current_selection_index + 1,
           last_key: selection.key,
           last_error: null,
-          message: `Copied ${job.copied + 1} file(s)`,
           current_folder_prefix: null,
           current_folder_page_json: null,
           current_folder_continuation_token: null,
-        });
+        };
+        if (outcome === "skipped") {
+          patch.skipped = job.skipped + 1;
+          patch.message = `Skipped ${selection.key}`;
+        } else {
+          patch.copied = job.copied + 1;
+          patch.message = `Copied ${job.copied + 1} file(s)`;
+        }
+        this.updateJob(job.id, patch);
       } catch (error) {
         this.handleStepFailure(job, selection.key, error);
         this.updateJob(job.id, {
@@ -2266,26 +2456,33 @@ export class TransferManager extends DurableObject<Env> {
     }
 
     try {
-      await copyStorageObject(
+      const outcome = await copyStorageObject(
         aws,
         source,
         destination,
         key,
         job.destination_prefix,
         relativePathFromPrefix(job.source_prefix, key),
+        conflictMode,
       );
       page.index += 1;
       const isPageDone = page.index >= page.keys.length;
-      this.updateJob(job.id, {
-        copied: job.copied + 1,
+      const patch: Partial<TransferJobRow> = {
         processed: job.processed + 1,
         last_key: key,
         last_error: null,
-        message: `Copied ${key}`,
         current_folder_page_json: isPageDone ? null : JSON.stringify(page),
         current_folder_continuation_token: isPageDone ? page.continuationToken || null : job.current_folder_continuation_token,
         current_selection_index: isPageDone && !page.continuationToken ? job.current_selection_index + 1 : job.current_selection_index,
-      });
+      };
+      if (outcome === "skipped") {
+        patch.skipped = job.skipped + 1;
+        patch.message = `Skipped ${key}`;
+      } else {
+        patch.copied = job.copied + 1;
+        patch.message = `Copied ${key}`;
+      }
+      this.updateJob(job.id, patch);
       if (isPageDone && !page.continuationToken) {
         this.updateJob(job.id, {
           current_folder_prefix: null,
@@ -2372,6 +2569,7 @@ export class TransferManager extends DurableObject<Env> {
       sourcePrefix: row.source_prefix,
       selections: JSON.parse(row.selections_json).length,
       copied: row.copied,
+      skipped: row.skipped,
       failed: row.failed,
       processed: row.processed,
       lastKey: row.last_key || undefined,
