@@ -1416,10 +1416,14 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
   const selections = normalizeTransferSelections(transfer.selections);
   if (transfer.previewOnly) {
     const plan = await buildTransferPlan(source, transfer.aws, selections, transfer.sourcePrefix);
-    const destinationHasContents = await storageResourceHasContents(transfer.aws, destination, transfer.destinationPrefix);
-    const preview = destinationHasContents
-      ? await detectTransferConflicts(transfer.aws, destination, plan, transfer.destinationPrefix)
-      : { conflictCount: 0, conflicts: [] as string[] };
+    const preview = await detectTransferConflictsWithMissingFolderShortcuts(
+      transfer.aws,
+      destination,
+      plan,
+      selections,
+      transfer.sourcePrefix,
+      transfer.destinationPrefix,
+    );
     const body: TransferConflictPreview = {
       conflictCount: preview.conflicts.length,
       conflicts: preview.conflicts.slice(0, 20),
@@ -2001,6 +2005,46 @@ async function detectTransferConflicts(
     conflictCount: conflicts.length,
     conflicts,
   };
+}
+
+async function detectTransferConflictsWithMissingFolderShortcuts(
+  aws: AwsCredentials,
+  destination: ResolvedStorageResource,
+  plan: TransferPlanEntry[],
+  selections: TransferSelection[],
+  sourcePrefix: string,
+  destinationPrefix: string,
+): Promise<TransferConflictPreview> {
+  if (!plan.length) {
+    return { conflictCount: 0, conflicts: [] };
+  }
+
+  const folderRoots = await Promise.all(
+    selections
+      .filter((selection) => selection.kind === "folder")
+      .map(async (selection) => {
+        const destinationRoot = ensureTrailingSlashPath(
+          joinPrefix(destinationPrefix, relativePathFromPrefix(sourcePrefix, selection.key)),
+        );
+        const hasContents = await storageResourceHasContents(aws, destination, destinationRoot);
+        return { destinationRoot, hasContents };
+      }),
+  );
+
+  const folderRootPrefixes = folderRoots
+    .filter((entry) => !entry.hasContents && entry.destinationRoot)
+    .map((entry) => entry.destinationRoot);
+
+  const scanPlan = plan.filter((entry) => {
+    const destinationKey = joinPrefix(destinationPrefix, entry.destinationKey);
+    return !folderRootPrefixes.some((root) => destinationKey === root || destinationKey.startsWith(root));
+  });
+
+  if (!scanPlan.length) {
+    return { conflictCount: 0, conflicts: [] };
+  }
+
+  return detectTransferConflicts(aws, destination, scanPlan, destinationPrefix);
 }
 
 async function storageResourceHasContents(
