@@ -1002,9 +1002,9 @@ function renderHtml(): string {
         }
       }
 
-      async function refreshJobs() {
+      async function refreshJobs(cleanupFailed = false) {
         try {
-          const response = await fetch("/api/jobs");
+          const response = await fetch("/api/jobs" + (cleanupFailed ? "?cleanupFailed=1" : ""));
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
             throw new Error(payload && payload.error ? payload.error : response.statusText || "Request failed");
@@ -1231,7 +1231,7 @@ function renderHtml(): string {
       renderJobs();
       syncSummary();
       writeUiState();
-      void refreshJobs();
+      void refreshJobs(true);
       setInterval(() => {
         void refreshJobs();
       }, 5000);
@@ -1319,6 +1319,9 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
 async function handleJobs(request: Request, env: AppEnv): Promise<Response> {
   const url = new URL(request.url);
   const manager = getTransferManagerStub(env);
+  if (url.searchParams.get("cleanupFailed") === "1") {
+    await manager.clearFailedJobs();
+  }
   const jobId = url.searchParams.get("jobId");
   if (jobId) {
     const job = await manager.getJob(jobId);
@@ -2257,6 +2260,11 @@ export class TransferManager extends DurableObject<Env> {
       .exec<TransferJobRow>(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT 50`)
       .toArray()
       .map((row) => this.rowToSummary(row));
+  }
+
+  async clearFailedJobs(): Promise<void> {
+    this.ctx.storage.sql.exec(`DELETE FROM job_events WHERE job_id IN (SELECT id FROM jobs WHERE status = 'failed')`);
+    this.ctx.storage.sql.exec(`DELETE FROM jobs WHERE status = 'failed'`);
   }
 
   async getJob(jobId: string): Promise<TransferJobDetail | null> {
