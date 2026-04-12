@@ -3320,13 +3320,9 @@ export class TransferManager extends DurableObject<Env> {
     );
     this.logEvent(id, "info", "Job queued");
     await this.schedule();
-    const runnerKick = this.processPendingJobs().catch((error) => {
+    void this.processPendingJobs().catch((error) => {
       this.logEvent(id, "error", `Job runner failed to start: ${(error as Error).message}`);
     });
-    const waitUntil = (this.ctx as { waitUntil?: (promise: Promise<unknown>) => void }).waitUntil;
-    if (typeof waitUntil === "function") {
-      waitUntil(runnerKick);
-    }
     const job = await this.getJob(id);
     if (!job) {
       throw new Error("Could not create job.");
