@@ -49,7 +49,7 @@ docker build -t s3-bunny-migration .
 Run it locally:
 
 ```bash
-docker run --rm -p 8787:8787 -e PORT=8787 -e HOST=0.0.0.0 s3-bunny-migration
+docker run --rm -p 8787:80 -e PORT=80 -e HOST=0.0.0.0 s3-bunny-migration
 ```
 
 The app stores its SQLite database in `./data` by default. If your Bunny container provides a persistent mount, point `DATA_DIR` or `DB_PATH` at that location.

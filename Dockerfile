@@ -10,7 +10,7 @@ FROM node:24-bookworm-slim AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
-ENV PORT=8787
+ENV PORT=80
 ENV HOST=0.0.0.0
 LABEL org.opencontainers.image.source="https://github.com/Go-Vennture/s3-bunny-migration"
 LABEL org.opencontainers.image.title="s3-bunny-migration"
@@ -21,6 +21,6 @@ RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist
 
-EXPOSE 8787
+EXPOSE 80
 
 CMD ["node", "dist/index.js"]
