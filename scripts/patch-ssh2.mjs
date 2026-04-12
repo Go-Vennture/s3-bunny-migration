@@ -12,6 +12,16 @@ const patches = [
     from: "try {\n  binding = require('./crypto/build/Release/sshcrypto.node');\n  ({ AESGCMCipher, ChaChaPolyCipher, GenericCipher,\n     AESGCMDecipher, ChaChaPolyDecipher, GenericDecipher } = binding);\n} catch {}\n\n",
     to: "",
   },
+  {
+    file: "node_modules/ssh2/lib/agent.js",
+    from: "  const EXEPATH = resolve(__dirname, '..', 'util/pagent.exe');\n",
+    to: "  const EXEPATH = typeof __dirname === 'string' ? resolve(__dirname, '..', 'util/pagent.exe') : null;\n",
+  },
+  {
+    file: "node_modules/ssh2/lib/agent.js",
+    from: "    const proc = this.proc = spawn(EXEPATH, [ data.length ]);\n",
+    to: "    if (!EXEPATH) {\n      cb(new Error('Pageant is not available in this runtime'));\n      return;\n    }\n    const proc = this.proc = spawn(EXEPATH, [ data.length ]);\n",
+  },
 ];
 
 let changed = 0;
