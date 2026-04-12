@@ -133,10 +133,17 @@ type TransferJobSummary = {
   updatedAt: string;
 };
 
+type TransferJobEvent = {
+  createdAt: string;
+  level: string;
+  message: string;
+};
+
 type TransferJobDetail = TransferJobSummary & {
   currentSelectionIndex: number;
   currentFolderPrefix?: string;
   currentFolderContinuationToken?: string | null;
+  events: TransferJobEvent[];
 };
 
 type AppEnv = Omit<Env, "TRANSFER_MANAGER"> & {
@@ -323,6 +330,22 @@ function renderHtml(): string {
     .jobs-list .list-row.job-row--processing{background:rgba(255,204,102,.14);box-shadow:inset 4px 0 0 rgba(255,204,102,.54)}
     .jobs-list .list-row.job-row--failed{background:rgba(255,107,107,.11);box-shadow:inset 4px 0 0 rgba(255,107,107,.46)}
     .jobs-list .list-row.job-row--cancelled{background:rgba(255,179,71,.12);box-shadow:inset 4px 0 0 rgba(255,179,71,.50)}
+    .jobs-list .list-row.job-row--openable{cursor:pointer}
+    .jobs-list .list-row.job-row--expanded{background:rgba(122,162,255,.11);box-shadow:inset 4px 0 0 rgba(122,162,255,.6)}
+    .jobs-list .list-row.job-detail-row{background:rgba(10,16,34,.85)}
+    .job-detail-panel{grid-column:1 / -1;display:grid;gap:10px;padding:4px 2px 12px}
+    .job-detail-card{display:grid;gap:10px;padding:14px 16px;border:1px solid rgba(42,57,111,.5);border-radius:16px;background:rgba(18,25,51,.88)}
+    .job-detail-header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:flex-start}
+    .job-detail-title{display:grid;gap:4px}
+    .job-detail-title strong{font-size:14px;color:var(--text)}
+    .job-detail-title .meta{white-space:normal;overflow:visible;text-overflow:clip}
+    .job-detail-summary{display:flex;flex-wrap:wrap;gap:8px}
+    .job-detail-summary .pill{padding:6px 10px;font-size:12px}
+    .job-detail-events{display:grid;gap:8px}
+    .job-detail-event{display:grid;gap:4px;padding:10px 12px;border-radius:12px;background:rgba(10,16,34,.92);border:1px solid rgba(42,57,111,.35)}
+    .job-detail-event--error{border-color:rgba(255,107,107,.38);background:rgba(255,107,107,.08)}
+    .job-detail-event strong{font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+    .job-detail-event span{white-space:normal;overflow:visible;text-overflow:clip;font-size:13px;line-height:1.45}
     .job-status-chip{display:inline-flex;align-items:center;max-width:100%;padding:4px 9px;border-radius:999px;border:1px solid transparent;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .job-status-chip--completed{background:rgba(72,213,151,.15);color:var(--ok);border-color:rgba(72,213,151,.22)}
     .job-status-chip--processing{background:rgba(255,204,102,.18);color:#ffd77a;border-color:rgba(255,204,102,.28)}
@@ -555,6 +578,10 @@ function renderHtml(): string {
         jobsPage: 1,
         jobsPageSize: 10,
         jobsTotal: 0,
+        expandedJobId: null,
+        expandedJobDetails: new Map(),
+        expandedJobError: new Map(),
+        expandedJobLoading: null,
         transferQueueNotice: "",
       };
       let conflictDialogResolve = null;
@@ -908,6 +935,8 @@ function renderHtml(): string {
                 : "processing";
           const statusLabel = job.status === "completed" && job.failed ? "completed with warnings" : job.status;
           const isActive = job.status === "queued" || job.status === "running";
+          const canOpenDetails = job.status === "completed" && job.failed > 0;
+          const isExpanded = state.expandedJobId === job.id;
           const filesLabel = Number.isFinite(job.totalFiles) && job.totalFiles > 0 ? String(job.totalFiles) : "—";
           const progressParts = [];
           if (job.copied) progressParts.push(String(job.copied) + " copied");
@@ -920,7 +949,9 @@ function renderHtml(): string {
           const route = providerLabel(job.sourceProvider) + " " + escapeHtml(job.sourceResource) + " -> " + providerLabel(job.destinationProvider) + " " + escapeHtml(job.destinationResource);
           const actionButton = isActive ? '<div class="job-actions"><button type="button" class="ghost mini" data-job-cancel="' + escapeHtml(job.id) + '">Cancel</button></div>' : "";
           const statusChip = '<span class="job-status-chip job-status-chip--' + tone + '">' + escapeHtml(statusLabel) + '</span>';
-          return '<div class="list-row job-row job-row--' + tone + '">' +
+          const openHint = canOpenDetails ? '<div class="meta">Click to inspect warning details.</div>' : "";
+          const rowAttrs = 'data-job-id="' + escapeHtml(job.id) + '"' + (canOpenDetails ? ' data-job-openable="1" tabindex="0" role="button" aria-expanded="' + (isExpanded ? "true" : "false") + '" title="Click to inspect warning details"' : "");
+          const row = '<div class="list-row job-row job-row--' + tone + (canOpenDetails ? ' job-row--openable' : '') + (isExpanded ? ' job-row--expanded' : '') + '" ' + rowAttrs + '>' +
             '<div>' +
               '<div><strong>' + escapeHtml(job.id.slice(0, 8)) + '</strong></div>' +
               '<div class="meta">' + route + '</div>' +
@@ -928,11 +959,49 @@ function renderHtml(): string {
             '<div class="meta">' + statusChip + '</div>' +
             '<div class="meta">' + escapeHtml(filesLabel) + '</div>' +
             '<div class="meta">' + escapeHtml(progress) + '</div>' +
-            '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + actionButton + '</div>' +
+            '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + openHint + actionButton + '</div>' +
           '</div>';
+          return row + (canOpenDetails && isExpanded ? renderJobDetails(job) : "");
         }).join("");
         const running = state.jobs.find((job) => job.status === "running" || job.status === "queued");
         els.jobsStatus.textContent = queueNotice || (running ? "Latest active job: " + running.id : "No active jobs.");
+      }
+
+      function renderJobDetails(job) {
+        const detail = state.expandedJobDetails.get(job.id);
+        const error = state.expandedJobError.get(job.id);
+        const loading = state.expandedJobLoading === job.id;
+        if (loading) {
+          return '<div class="list-row job-detail-row"><div class="job-detail-panel"><div class="job-detail-card"><div class="meta">Loading warning details...</div></div></div></div>';
+        }
+        if (error) {
+          return '<div class="list-row job-detail-row"><div class="job-detail-panel"><div class="job-detail-card"><div class="meta error">' + escapeHtml(error) + '</div></div></div></div>';
+        }
+        const events = detail && Array.isArray(detail.events) ? detail.events : [];
+        const warningEvents = events.filter((event) => event.level === "error");
+        const eventSource = warningEvents.length ? warningEvents : events;
+        const summary = [
+          '<span class="pill"><strong>' + escapeHtml(String(job.copied || 0)) + '</strong> copied</span>',
+          '<span class="pill"><strong>' + escapeHtml(String(job.skipped || 0)) + '</strong> skipped</span>',
+          '<span class="pill"><strong>' + escapeHtml(String(job.failed || 0)) + '</strong> failed</span>',
+        ].join("");
+        const eventMarkup = eventSource.length
+          ? eventSource.map((event) => '<div class="job-detail-event job-detail-event--' + escapeHtml(event.level === "error" ? "error" : "info") + '">' +
+              '<strong>' + escapeHtml(event.level === "error" ? "Warning" : event.level) + '</strong>' +
+              '<span>' + escapeHtml(event.message) + '</span>' +
+            '</div>').join("")
+          : '<div class="job-detail-event"><strong>Warning details</strong><span>No warning events were captured for this job.</span></div>';
+        const updatedAt = detail && detail.updatedAt ? detail.updatedAt : job.updatedAt;
+        return '<div class="list-row job-detail-row"><div class="job-detail-panel"><div class="job-detail-card">' +
+          '<div class="job-detail-header">' +
+            '<div class="job-detail-title">' +
+              '<strong>Warning details</strong>' +
+              '<div class="meta">Updated ' + escapeHtml(updatedAt) + '</div>' +
+            '</div>' +
+            '<div class="job-detail-summary">' + summary + '</div>' +
+          '</div>' +
+          '<div class="job-detail-events">' + eventMarkup + '</div>' +
+        '</div></div></div>';
       }
 
       function normalizeTransferSelections(selections) {
@@ -959,9 +1028,49 @@ function renderHtml(): string {
           if (index >= 0) {
             state.jobs[index] = payload.job;
           }
+          if (state.expandedJobId === payload.job.id && payload.job.status !== "completed") {
+            state.expandedJobId = null;
+            state.expandedJobLoading = null;
+            state.expandedJobError.delete(payload.job.id);
+            state.expandedJobDetails.delete(payload.job.id);
+          }
           renderJobs();
           await refreshJobs();
         }
+      }
+
+      async function openJobDetails(jobId) {
+        state.expandedJobId = jobId;
+        state.expandedJobLoading = jobId;
+        state.expandedJobError.delete(jobId);
+        renderJobs();
+        try {
+          const response = await fetch("/api/jobs?jobId=" + encodeURIComponent(jobId));
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload && payload.error ? payload.error : response.statusText || "Request failed");
+          }
+          state.expandedJobDetails.set(jobId, payload.job);
+        } catch (error) {
+          state.expandedJobError.set(jobId, errorMessage(error));
+        } finally {
+          if (state.expandedJobLoading === jobId) {
+            state.expandedJobLoading = null;
+          }
+          if (state.expandedJobId === jobId) {
+            renderJobs();
+          }
+        }
+      }
+
+      function toggleJobDetails(jobId) {
+        if (state.expandedJobId === jobId) {
+          state.expandedJobId = null;
+          state.expandedJobLoading = null;
+          renderJobs();
+          return;
+        }
+        void openJobDetails(jobId);
       }
 
       function changeJobsPage(delta) {
@@ -1331,6 +1440,27 @@ function renderHtml(): string {
         void cancelJob(jobId).catch((error) => {
           log(errorMessage(error), "error");
         });
+      });
+      els.jobsList.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest("[data-job-cancel]")) return;
+        const row = target.closest("[data-job-id][data-job-openable='1']");
+        if (!(row instanceof HTMLElement)) return;
+        const jobId = row.getAttribute("data-job-id");
+        if (!jobId) return;
+        toggleJobDetails(jobId);
+      });
+      els.jobsList.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const row = target.closest("[data-job-id][data-job-openable='1']");
+        if (!(row instanceof HTMLElement)) return;
+        event.preventDefault();
+        const jobId = row.getAttribute("data-job-id");
+        if (!jobId) return;
+        toggleJobDetails(jobId);
       });
       els.conflictReplace.addEventListener("click", () => closeConflictDialog("replace"));
       els.conflictNew.addEventListener("click", () => closeConflictDialog("new"));
@@ -2664,7 +2794,7 @@ export class TransferManager extends DurableObject<Env> {
     if (!row) {
       return null;
     }
-    return this.rowToDetail(row);
+    return this.rowToDetail(row, this.getJobEvents(jobId));
   }
 
   async alarm(): Promise<void> {
@@ -3007,13 +3137,28 @@ export class TransferManager extends DurableObject<Env> {
     };
   }
 
-  private rowToDetail(row: TransferJobRow): TransferJobDetail {
+  private rowToDetail(row: TransferJobRow, events: TransferJobEvent[] = []): TransferJobDetail {
     return {
       ...this.rowToSummary(row),
       currentSelectionIndex: row.current_selection_index,
       currentFolderPrefix: row.current_folder_prefix || undefined,
       currentFolderContinuationToken: row.current_folder_continuation_token || null,
+      events,
     };
+  }
+
+  private getJobEvents(jobId: string): TransferJobEvent[] {
+    return this.ctx.storage.sql
+      .exec<{ created_at: number; level: string; message: string }>(
+        `SELECT created_at, level, message FROM job_events WHERE job_id = ? ORDER BY created_at ASC, id ASC`,
+        jobId,
+      )
+      .toArray()
+      .map((row) => ({
+        createdAt: new Date(row.created_at).toISOString(),
+        level: row.level,
+        message: row.message,
+      }));
   }
 
   private logEvent(jobId: string, level: string, message: string): void {
