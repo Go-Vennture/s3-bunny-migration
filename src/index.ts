@@ -3841,7 +3841,7 @@ async function handleNodeHttpRequest(request: Request): Promise<Response> {
 async function startServer(): Promise<void> {
   await transferManager.ready;
   transferManager.kick();
-  const port = Number(process.env.PORT || 8787);
+  const port = Number(process.env.PORT || 80);
   const host = process.env.HOST || "0.0.0.0";
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
