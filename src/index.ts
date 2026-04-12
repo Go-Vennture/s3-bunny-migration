@@ -2491,10 +2491,14 @@ async function copyStorageObject(
     throw new Error(await sourceResponse.text());
   }
   const contentType = sourceResponse.headers.get("content-type") || "application/octet-stream";
-  const destinationBody = destination.provider === "bunny"
-    ? await sourceResponse.arrayBuffer()
-    : sourceResponse.body;
-  await writeStorageObject(aws, destination, finalKey, destinationBody, contentType);
+  await writeStorageObject(
+    aws,
+    destination,
+    finalKey,
+    sourceResponse.body,
+    contentType,
+    sourceResponse.headers.get("content-length") || undefined,
+  );
   return "copied";
 }
 
@@ -2518,12 +2522,13 @@ async function writeStorageObject(
   key: string,
   body: BodyInit | null,
   contentType: string,
+  contentLength?: string,
 ): Promise<void> {
   if (resource.provider === "aws") {
     await putAwsObject(aws, resource.name, resource.region, key, body, contentType);
     return;
   }
-  await putBunnyObject(resource, key, body, contentType);
+  await putBunnyObject(resource, key, body, contentType, contentLength);
 }
 
 async function getAwsObject(aws: AwsCredentials, bucket: string, region: string, key: string): Promise<Response> {
@@ -2599,14 +2604,15 @@ async function putBunnyObject(
   key: string,
   body: BodyInit | null,
   contentType: string,
+  contentLength?: string,
 ): Promise<void> {
   const endpoint = bunnyEndpointForRegion(resource.region);
   const headers = new Headers({
     AccessKey: resource.password || "",
     "Content-Type": contentType,
   });
-  if (body && !(body instanceof ReadableStream)) {
-    headers.set("Checksum", (await sha256Hex(body)).toUpperCase());
+  if (contentLength) {
+    headers.set("Content-Length", contentLength);
   }
   const upload = await fetch(`https://${endpoint}${bunnyObjectPath(resource.name, key)}`, {
     method: "PUT",
@@ -2614,7 +2620,8 @@ async function putBunnyObject(
     body,
   });
   if (!upload.ok && upload.status !== 201) {
-    throw new Error(await upload.text());
+    const message = await upload.text();
+    throw new Error(message || `Bunny upload failed with status ${upload.status}.`);
   }
 }
 
