@@ -102,6 +102,7 @@ type TransferJobSelection = TransferSelection;
 
 type TransferJobCreateRequest = {
   aws: AwsCredentials;
+  awsRegion: string;
   source: StorageResourceRef & { password?: string };
   sourcePrefix: string;
   selections: TransferJobSelection[];
@@ -170,6 +171,7 @@ type TransferJobRow = {
   aws_access_key_id: string;
   aws_secret_access_key: string;
   aws_session_token: string | null;
+  aws_region: string | null;
   destination_provider: StorageProvider;
   destination_zone: string;
   destination_zone_region: string;
@@ -329,6 +331,7 @@ function renderHtml(): string {
     .jobs-list .list-row.job-row .meta{color:#a9b4d0}
     .jobs-list .list-row.job-row:hover{background:rgba(122,162,255,.08)}
     .jobs-list .list-row.job-row--completed{background:rgba(72,213,151,.10);box-shadow:inset 4px 0 0 rgba(72,213,151,.42)}
+    .jobs-list .list-row.job-row--warning{background:rgba(255,204,102,.11);box-shadow:inset 4px 0 0 rgba(255,204,102,.52)}
     .jobs-list .list-row.job-row--processing{background:rgba(255,204,102,.14);box-shadow:inset 4px 0 0 rgba(255,204,102,.54)}
     .jobs-list .list-row.job-row--failed{background:rgba(255,107,107,.11);box-shadow:inset 4px 0 0 rgba(255,107,107,.46)}
     .jobs-list .list-row.job-row--cancelled{background:rgba(255,179,71,.12);box-shadow:inset 4px 0 0 rgba(255,179,71,.50)}
@@ -354,6 +357,7 @@ function renderHtml(): string {
     .job-detail-event span{white-space:normal;overflow:visible;text-overflow:clip;font-size:13px;line-height:1.45}
     .job-status-chip{display:inline-flex;align-items:center;max-width:100%;padding:4px 9px;border-radius:999px;border:1px solid transparent;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .job-status-chip--completed{background:rgba(72,213,151,.15);color:var(--ok);border-color:rgba(72,213,151,.22)}
+    .job-status-chip--warning{background:rgba(255,204,102,.18);color:var(--warn);border-color:rgba(255,204,102,.28)}
     .job-status-chip--processing{background:rgba(255,204,102,.18);color:#ffd77a;border-color:rgba(255,204,102,.28)}
     .job-status-chip--failed{background:rgba(255,107,107,.15);color:var(--danger);border-color:rgba(255,107,107,.24)}
     .job-status-chip--cancelled{background:rgba(255,179,71,.16);color:var(--cancel);border-color:rgba(255,179,71,.24)}
@@ -933,7 +937,7 @@ function renderHtml(): string {
         }
         els.jobsList.innerHTML = header + state.jobs.map((job) => {
           const tone = job.status === "completed"
-            ? "completed"
+            ? (job.failed ? "warning" : "completed")
             : job.status === "failed"
               ? "failed"
               : job.status === "cancelled"
@@ -1690,10 +1694,15 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     resolveStorageResource(transfer.bunnyApiKey, transfer.destination),
   ]);
   const selections = normalizeTransferSelections(transfer.selections);
+  const awsRegion = resolveTransferAwsRegion(source, destination, transfer.aws.region);
+  const aws = {
+    ...transfer.aws,
+    region: awsRegion,
+  };
   if (transfer.previewOnly) {
-    const plan = await buildTransferPlan(source, transfer.aws, selections, transfer.sourcePrefix);
+    const plan = await buildTransferPlan(source, aws, selections, transfer.sourcePrefix);
     const preview = await detectTransferConflictsWithMissingFolderShortcuts(
-      transfer.aws,
+      aws,
       destination,
       plan,
       selections,
@@ -1709,7 +1718,8 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
   }
   const manager = getTransferManagerStub(env);
   const job = await manager.createJob({
-    aws: transfer.aws,
+    aws,
+    awsRegion,
     source,
     sourcePrefix: transfer.sourcePrefix,
     selections,
@@ -1771,6 +1781,20 @@ async function handleJobRetry(request: Request, env: AppEnv): Promise<Response> 
     return json({ error: "Job not found" }, { status: 404 });
   }
   return json({ job });
+}
+
+function resolveTransferAwsRegion(
+  source: ResolvedStorageResource,
+  destination: ResolvedStorageResource,
+  fallbackRegion: string,
+): string {
+  if (source.provider === "aws") {
+    return source.region;
+  }
+  if (destination.provider === "aws") {
+    return destination.region;
+  }
+  return fallbackRegion || "us-east-1";
 }
 
 function getTransferManagerStub(env: AppEnv): DurableObjectStub<TransferManager> {
@@ -2690,6 +2714,7 @@ export class TransferManager extends DurableObject<Env> {
           aws_access_key_id TEXT NOT NULL,
           aws_secret_access_key TEXT NOT NULL,
           aws_session_token TEXT,
+          aws_region TEXT,
           destination_zone TEXT NOT NULL,
           destination_zone_region TEXT NOT NULL,
           destination_zone_password TEXT NOT NULL,
@@ -2722,6 +2747,7 @@ export class TransferManager extends DurableObject<Env> {
       addColumn("aws_access_key_id", "aws_access_key_id TEXT NOT NULL DEFAULT ''");
       addColumn("aws_secret_access_key", "aws_secret_access_key TEXT NOT NULL DEFAULT ''");
       addColumn("aws_session_token", "aws_session_token TEXT");
+      addColumn("aws_region", "aws_region TEXT");
       addColumn("destination_provider", "destination_provider TEXT NOT NULL DEFAULT 'bunny'");
       addColumn("destination_zone", "destination_zone TEXT NOT NULL DEFAULT ''");
       addColumn("destination_zone_region", "destination_zone_region TEXT NOT NULL DEFAULT ''");
@@ -2773,11 +2799,11 @@ export class TransferManager extends DurableObject<Env> {
           source_provider, source_bucket, source_region,
           source_prefix, source_resource_password,
           aws_access_key_id, aws_secret_access_key, aws_session_token,
-          destination_provider, destination_zone, destination_zone_region, destination_zone_password,
+          aws_region, destination_provider, destination_zone, destination_zone_region, destination_zone_password,
           destination_prefix, selections_json, total_files,
           current_selection_index, current_folder_prefix, current_folder_page_json, current_folder_continuation_token,
           copied, skipped, failed, processed, last_key, last_error, message, conflict_mode
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       id,
       now,
@@ -2791,6 +2817,7 @@ export class TransferManager extends DurableObject<Env> {
       input.aws.accessKeyId,
       input.aws.secretAccessKey,
       input.aws.sessionToken || null,
+      input.awsRegion,
       input.destination.provider,
       input.destination.name,
       input.destination.region,
@@ -2883,8 +2910,9 @@ export class TransferManager extends DurableObject<Env> {
         accessKeyId: job.aws_access_key_id,
         secretAccessKey: job.aws_secret_access_key,
         sessionToken: job.aws_session_token || undefined,
-        region: job.source_region,
+        region: job.aws_region || job.source_region,
       },
+      awsRegion: job.aws_region || job.source_region,
       source: {
         provider: job.source_provider,
         name: job.source_bucket,
@@ -2991,7 +3019,7 @@ export class TransferManager extends DurableObject<Env> {
       accessKeyId: job.aws_access_key_id,
       secretAccessKey: job.aws_secret_access_key,
       sessionToken: job.aws_session_token || undefined,
-      region: job.source_region,
+      region: job.aws_region || job.source_region,
     };
     const conflictMode = job.conflict_mode === "new" ? "new" : "replace";
 
