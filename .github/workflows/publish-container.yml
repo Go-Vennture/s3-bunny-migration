@@ -12,6 +12,9 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
+  BUNNY_MC_APP_ID: ${{ vars.BUNNY_MC_APP_ID }}
+  BUNNY_MC_CONTAINER: ${{ vars.BUNNY_MC_CONTAINER }}
+  BUNNYNET_API_KEY: ${{ secrets.BUNNYNET_API_KEY }}
 
 jobs:
   build-and-push:
@@ -51,3 +54,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Update Bunny Magic Containers image
+        if: ${{ env.BUNNY_MC_APP_ID != '' && env.BUNNY_MC_CONTAINER != '' && env.BUNNYNET_API_KEY != '' }}
+        uses: BunnyWay/actions/container-update-image@main
+        with:
+          app_id: ${{ env.BUNNY_MC_APP_ID }}
+          api_key: ${{ env.BUNNYNET_API_KEY }}
+          container: ${{ env.BUNNY_MC_CONTAINER }}
+          image_tag: ${{ github.sha }}

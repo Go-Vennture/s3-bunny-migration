@@ -4,6 +4,27 @@ Single-process Node app for copying files and folders between Amazon S3 buckets 
 
 The UI, API, and background job runner all live in one service so it can be packaged as a single Bunny container.
 
+## Public Package
+
+This repository publishes a Bunny-ready container image from GitHub Container Registry:
+
+```text
+ghcr.io/Go-Vennture/s3-bunny-migration
+```
+
+The `main` branch publishes the latest image tag, and every build also gets an immutable SHA tag.
+
+You can pull the published image directly with Docker:
+
+```bash
+docker pull ghcr.io/Go-Vennture/s3-bunny-migration:main
+```
+
+To use the image publicly:
+
+- Make the GHCR package public in GitHub, or
+- Add your GitHub registry credentials in Bunny Magic Containers if you want to keep the package private.
+
 ## What It Does
 
 - Browses a source and destination side by side.
@@ -56,17 +77,22 @@ The app stores its SQLite database in `./data` by default. If your Bunny contain
 
 ## GitHub Container Registry
 
-GitHub Actions publishes a Bunny-ready image on every push to `main`.
+GitHub Actions publishes Bunny-ready images on every push to `main`.
 
-The published image name is:
+Use either of these image tags in Bunny Magic Containers:
 
 ```text
-ghcr.io/<your-github-owner>/s3-bunny-migration:main
+ghcr.io/Go-Vennture/s3-bunny-migration:main
+ghcr.io/Go-Vennture/s3-bunny-migration:<sha>
 ```
 
-You can also use the immutable SHA tag from the same workflow.
+To auto-apply updates in Bunny on every push, set these repository variables/secrets:
 
-GitHub Container Registry packages are private by default the first time they are published. If you want Bunny to discover the image without extra registry credentials, change the package visibility to public in GitHub. If you keep it private, add your GitHub registry credentials in Bunny Magic Containers under Image Registries. Bunny’s docs support both public and private GitHub registries.
+- `BUNNY_MC_APP_ID`
+- `BUNNY_MC_CONTAINER`
+- `BUNNYNET_API_KEY`
+
+If you keep the GHCR package private, add your GitHub registry credentials in Bunny Magic Containers under Image Registries. If you make it public, Bunny can pull it without extra registry credentials.
 
 ## CLI
 
