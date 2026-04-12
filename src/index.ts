@@ -2491,13 +2491,17 @@ async function copyStorageObject(
     throw new Error(await sourceResponse.text());
   }
   const contentType = sourceResponse.headers.get("content-type") || "application/octet-stream";
+  let contentLength = sourceResponse.headers.get("content-length") || undefined;
+  if (destination.provider === "bunny" && !contentLength) {
+    contentLength = await resolveStorageObjectLength(aws, source, sourceKey);
+  }
   await writeStorageObject(
     aws,
     destination,
     finalKey,
     sourceResponse.body,
     contentType,
-    sourceResponse.headers.get("content-length") || undefined,
+    contentLength,
   );
   return "copied";
 }
@@ -2514,6 +2518,27 @@ async function storageObjectExists(aws: AwsCredentials, resource: ResolvedStorag
     return awsObjectExists(aws, resource.name, resource.region, key);
   }
   return bunnyObjectExists(resource, key);
+}
+
+async function resolveStorageObjectLength(aws: AwsCredentials, resource: ResolvedStorageResource, key: string): Promise<string | undefined> {
+  const response = resource.provider === "aws"
+    ? await signedS3RequestToHost(
+        aws,
+        "HEAD",
+        `s3.${resource.region}.amazonaws.com`,
+        resource.region,
+        `/${resource.name}/${key}`,
+        new URLSearchParams(),
+        undefined,
+      )
+    : await fetch(`https://${bunnyEndpointForRegion(resource.region)}${bunnyObjectPath(resource.name, key)}`, {
+        method: "HEAD",
+        headers: { AccessKey: resource.password || "" },
+      });
+  if (!response.ok) {
+    return undefined;
+  }
+  return response.headers.get("content-length") || undefined;
 }
 
 async function writeStorageObject(
@@ -2622,11 +2647,12 @@ async function putBunnyObject(
       requestBody = fixedLength.readable;
     }
   }
-  const uploadPromise = fetch(requestUrl, {
+  const uploadRequest = new Request(requestUrl, {
     method: "PUT",
     headers,
     body: requestBody,
   });
+  const uploadPromise = fetch(uploadRequest);
   const upload = await uploadPromise;
   if (pipePromise) {
     await pipePromise;
