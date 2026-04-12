@@ -54,6 +54,20 @@ docker run --rm -p 8787:8787 -e PORT=8787 -e HOST=0.0.0.0 s3-bunny-migration
 
 The app stores its SQLite database in `./data` by default. If your Bunny container provides a persistent mount, point `DATA_DIR` or `DB_PATH` at that location.
 
+## GitHub Container Registry
+
+GitHub Actions publishes a Bunny-ready image on every push to `main`.
+
+The published image name is:
+
+```text
+ghcr.io/<your-github-owner>/s3-bunny-migration:main
+```
+
+You can also use the immutable SHA tag from the same workflow.
+
+If you keep the GHCR image private, add your GitHub registry credentials in Bunny Magic Containers under Image Registries. Bunny’s docs support both public and private GitHub registries.
+
 ## CLI
 
 You can also drive the same API from the terminal:
