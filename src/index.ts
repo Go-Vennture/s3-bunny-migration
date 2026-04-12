@@ -298,6 +298,10 @@ function renderHtml(): string {
     .contents-card h3{margin:0 0 10px;font-size:18px}
     .contents-card .inline-note{margin:0 0 12px}
     .contents-controls{display:grid;gap:12px;margin-bottom:12px}
+    .table-toolbar{display:flex;justify-content:space-between;gap:12px;align-items:end;flex-wrap:wrap;margin:4px 0 12px}
+    .table-search{flex:1 1 280px;min-width:min(100%,280px)}
+    .table-search input{background:var(--panel2)}
+    .table-hint{flex:1 1 220px;margin:0}
     .contents-select-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}
     .contents-path-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:end}
     .contents-path-row .field{margin:0}
@@ -305,6 +309,11 @@ function renderHtml(): string {
     .contents-list{flex:none;height:540px;min-height:0;overflow-y:auto}
     .list-head,.list-row{display:grid;grid-template-columns:34px minmax(0,1fr) 120px 140px;align-items:center;gap:10px;padding:10px 12px}
     .list-head{position:sticky;top:0;background:#121933;border-bottom:1px solid rgba(42,57,111,.7);font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.03em;z-index:1}
+    .list-head > div{min-width:0}
+    .sort-toggle{display:inline-flex;align-items:center;gap:6px;width:100%;padding:0;background:transparent;color:inherit;border:0;font:inherit;font-weight:700;letter-spacing:.03em;cursor:pointer;text-align:left}
+    .sort-toggle:hover{color:var(--text)}
+    .sort-toggle:focus{outline:2px solid rgba(122,162,255,.32);outline-offset:3px}
+    .sort-indicator{font-size:11px;color:var(--accent);line-height:1}
     .list-row{border-bottom:1px solid rgba(42,57,111,.2)}
     .list-row:last-child{border-bottom:0}
     .list-row:hover{background:rgba(122,162,255,.08)}
@@ -339,9 +348,16 @@ function renderHtml(): string {
     .jobs-list .list-row.job-row--processing{background:rgba(255,204,102,.14);box-shadow:inset 4px 0 0 rgba(255,204,102,.54)}
     .jobs-list .list-row.job-row--failed{background:rgba(255,107,107,.11);box-shadow:inset 4px 0 0 rgba(255,107,107,.46)}
     .jobs-list .list-row.job-row--cancelled{background:rgba(255,179,71,.12);box-shadow:inset 4px 0 0 rgba(255,179,71,.50)}
+    .jobs-list .list-row.job-row--active{box-shadow:inset 4px 0 0 rgba(122,162,255,.9)}
     .jobs-list .list-row.job-row--openable{cursor:pointer}
     .jobs-list .list-row.job-row--expanded{background:rgba(122,162,255,.11);box-shadow:inset 4px 0 0 rgba(122,162,255,.6)}
     .jobs-list .list-row.job-detail-row{background:rgba(10,16,34,.85)}
+    .job-progress{display:grid;gap:6px;min-width:0}
+    .job-progress-bar{height:8px;border-radius:999px;background:rgba(42,57,111,.7);overflow:hidden}
+    .job-progress-bar span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),#9bc2ff);width:var(--progress,0%)}
+    .job-progress-meta{display:grid;gap:2px;min-width:0}
+    .job-progress-meta .meta{white-space:normal;overflow:visible;text-overflow:clip}
+    .job-progress-meta .meta strong{color:var(--text)}
     .job-detail-panel{grid-column:1 / -1;display:grid;gap:10px;padding:4px 2px 12px}
     .job-detail-card{display:grid;gap:10px;padding:14px 16px;border:1px solid rgba(42,57,111,.5);border-radius:16px;background:rgba(18,25,51,.88)}
     .job-detail-header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:flex-start}
@@ -374,7 +390,7 @@ function renderHtml(): string {
     .dialog-list{display:grid;gap:6px;max-height:220px;overflow-y:auto;border:1px solid rgba(42,57,111,.5);border-radius:16px;padding:12px;background:rgba(10,16,34,.92);font-size:13px;color:var(--text)}
     .dialog-actions{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end}
     .dialog-actions .ghost,.dialog-actions .secondary{min-height:42px}
-    @media (max-width:1100px){.layout,.contents-layout{grid-template-columns:1fr}}
+    @media (max-width:1100px){.layout,.contents-layout{grid-template-columns:1fr}.table-toolbar{flex-direction:column;align-items:stretch}}
     @media (max-width:720px){.grid-2{grid-template-columns:1fr}.list-head,.list-row{grid-template-columns:34px minmax(0,1fr) 86px}.size-col{display:none}}
   </style>
 </head>
@@ -441,6 +457,13 @@ function renderHtml(): string {
             <button class="secondary" id="loadSourcePath">Refresh</button>
           </div>
         </div>
+        <div class="table-toolbar">
+          <div class="field table-search">
+            <label for="sourceSearch">Search source</label>
+            <input id="sourceSearch" autocomplete="off" spellcheck="false" placeholder="Filter loaded rows" value="" />
+          </div>
+          <div class="inline-note table-hint">Click a column header to sort the visible rows.</div>
+        </div>
         <div class="list contents-list" id="sourceList" aria-live="polite"></div>
       </article>
       <article class="contents-card">
@@ -469,6 +492,13 @@ function renderHtml(): string {
             <button class="secondary" id="loadDestinationPath">Refresh</button>
           </div>
         </div>
+        <div class="table-toolbar">
+          <div class="field table-search">
+            <label for="destinationSearch">Search destination</label>
+            <input id="destinationSearch" autocomplete="off" spellcheck="false" placeholder="Filter loaded rows" value="" />
+          </div>
+          <div class="inline-note table-hint">Click a column header to sort the visible rows.</div>
+        </div>
         <div class="list contents-list" id="destinationList" aria-live="polite"></div>
       </article>
     </section>
@@ -490,6 +520,13 @@ function renderHtml(): string {
       <div class="transfer-card">
         <h3>Background jobs</h3>
         <div class="inline-note">Queued jobs keep running in the Durable Object and you can watch progress here.</div>
+        <div class="table-toolbar">
+          <div class="field table-search">
+            <label for="jobsSearch">Search jobs</label>
+            <input id="jobsSearch" autocomplete="off" spellcheck="false" placeholder="Filter visible jobs" value="" />
+          </div>
+          <div class="inline-note table-hint">Search filters the current page of jobs.</div>
+        </div>
         <div class="jobs-toolbar">
           <div class="inline-note" id="jobsCount">Showing 0 jobs.</div>
           <div class="jobs-pager">
@@ -545,6 +582,7 @@ function renderHtml(): string {
         sourceProviderSelect: $("sourceProviderSelect"),
         sourceResourceSelect: $("sourceResourceSelect"),
         sourcePrefix: $("sourcePrefix"),
+        sourceSearch: $("sourceSearch"),
         sourceList: $("sourceList"),
         sourceStatus: $("sourceStatus"),
         sourceUp: $("sourceUp"),
@@ -553,6 +591,7 @@ function renderHtml(): string {
         destinationProviderSelect: $("destinationProviderSelect"),
         destinationResourceSelect: $("destinationResourceSelect"),
         destinationPrefix: $("destinationPrefix"),
+        destinationSearch: $("destinationSearch"),
         destinationList: $("destinationList"),
         destinationStatus: $("destinationStatus"),
         destinationUp: $("destinationUp"),
@@ -565,6 +604,7 @@ function renderHtml(): string {
         clearSelection: $("clearSelection"),
         log: $("log"),
         jobsList: $("jobsList"),
+        jobsSearch: $("jobsSearch"),
         jobsCount: $("jobsCount"),
         jobsPrev: $("jobsPrev"),
         jobsNext: $("jobsNext"),
@@ -586,12 +626,18 @@ function renderHtml(): string {
         sourceItems: [],
         sourceContinuationToken: null,
         sourceSelections: new Map(),
+        sourceSearch: "",
+        sourceSort: { key: "name", direction: "asc" },
         destinationItems: [],
         destinationContinuationToken: null,
+        destinationSearch: "",
+        destinationSort: { key: "name", direction: "asc" },
         jobs: [],
         jobsPage: 1,
         jobsPageSize: 10,
         jobsTotal: 0,
+        jobsSearch: "",
+        jobsSort: { key: "createdAt", direction: "desc" },
         expandedJobId: null,
         expandedJobDetails: new Map(),
         expandedJobError: new Map(),
@@ -701,6 +747,219 @@ function renderHtml(): string {
       function setSideContinuationToken(side, token) {
         if (side === "source") state.sourceContinuationToken = token;
         else state.destinationContinuationToken = token;
+      }
+
+      function normalizeSearchQuery(value) {
+        return String(value || "").trim().toLowerCase();
+      }
+
+      function getSideSearch(side) {
+        return side === "source" ? state.sourceSearch : state.destinationSearch;
+      }
+
+      function setSideSearch(side, value) {
+        if (side === "source") state.sourceSearch = value;
+        else state.destinationSearch = value;
+      }
+
+      function getSideSort(side) {
+        return side === "source" ? state.sourceSort : state.destinationSort;
+      }
+
+      function setSideSort(side, key) {
+        const sort = getSideSort(side);
+        if (sort.key === key) {
+          sort.direction = sort.direction === "asc" ? "desc" : "asc";
+        } else {
+          sort.key = key;
+          sort.direction = key === "modified" ? "desc" : "asc";
+        }
+      }
+
+      function getJobsSort() {
+        return state.jobsSort;
+      }
+
+      function setJobsSort(key) {
+        const sort = state.jobsSort;
+        if (sort.key === key) {
+          sort.direction = sort.direction === "asc" ? "desc" : "asc";
+        } else {
+          sort.key = key;
+          sort.direction = key === "createdAt" || key === "files" || key === "progress" ? "desc" : "asc";
+        }
+      }
+
+      function sortIndicator(sort, key) {
+        if (sort.key !== key) return "↕";
+        return sort.direction === "asc" ? "▲" : "▼";
+      }
+
+      function formatRelativeTime(value) {
+        const timestamp = Date.parse(String(value || ""));
+        if (!Number.isFinite(timestamp)) {
+          return "";
+        }
+        const diff = Date.now() - timestamp;
+        if (diff < 5_000) return "just now";
+        const minutes = Math.floor(diff / 60_000);
+        if (minutes < 1) return "moments ago";
+        if (minutes < 60) return minutes + "m ago";
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return hours + "h ago";
+        const days = Math.floor(hours / 24);
+        if (days < 7) return days + "d ago";
+        return new Date(timestamp).toLocaleString();
+      }
+
+      function formatJobActiveSummary(job) {
+        const processed = Number(job.processed || 0);
+        const total = Number(job.totalFiles || 0);
+        const progress = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+        const parts = [];
+        if (processed || total) {
+          parts.push(total > 0 ? processed + " / " + total + " processed" : processed + " processed");
+        }
+        if (job.lastKey) {
+          parts.push("now on " + job.lastKey);
+        }
+        const updated = formatRelativeTime(job.updatedAt);
+        if (updated) {
+          parts.push("updated " + updated);
+        }
+        return {
+          progress,
+          text: parts.join(" • "),
+        };
+      }
+
+      function sideItemLabel(item) {
+        if (item.type === "folder") {
+          const trimmed = item.key.replace(/\/+$/, "");
+          return (trimmed.split("/").pop() || trimmed) + "/";
+        }
+        return item.key.split("/").pop() || item.key;
+      }
+
+      function compareText(left, right, direction) {
+        return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" }) * direction;
+      }
+
+      function compareSideItems(left, right, sort) {
+        const direction = sort.direction === "desc" ? -1 : 1;
+        let leftValue;
+        let rightValue;
+        if (sort.key === "size") {
+          leftValue = left.type === "folder" ? -1 : left.size;
+          rightValue = right.type === "folder" ? -1 : right.size;
+          return (leftValue - rightValue) * direction || compareText(sideItemLabel(left), sideItemLabel(right), direction);
+        }
+        if (sort.key === "modified") {
+          leftValue = left.lastModified || left.lastChanged || "";
+          rightValue = right.lastModified || right.lastChanged || "";
+          return compareText(leftValue, rightValue, direction) || compareText(sideItemLabel(left), sideItemLabel(right), direction);
+        }
+        if (sort.key === "type") {
+          leftValue = left.type;
+          rightValue = right.type;
+          return compareText(leftValue, rightValue, direction) || compareText(sideItemLabel(left), sideItemLabel(right), direction);
+        }
+        return compareText(sideItemLabel(left), sideItemLabel(right), direction);
+      }
+
+      function searchSideItem(item) {
+        return [
+          item.key,
+          sideItemLabel(item),
+          item.type,
+          item.lastModified || item.lastChanged || "",
+          item.type === "folder" ? "folder" : formatBytes(item.size),
+        ].join(" ").toLowerCase();
+      }
+
+      function getVisibleSideItems(side) {
+        const sort = getSideSort(side);
+        const query = normalizeSearchQuery(getSideSearch(side));
+        const items = sideItems(side).slice().sort((left, right) => compareSideItems(left, right, sort));
+        if (!query) {
+          return items;
+        }
+        return items.filter((item) => searchSideItem(item).includes(query));
+      }
+
+      function updateSideStatus(side) {
+        const elements = sideElements(side);
+        const total = sideItems(side).length;
+        const visible = getVisibleSideItems(side).length;
+        const query = normalizeSearchQuery(getSideSearch(side));
+        const hasMore = Boolean(sideContinuationToken(side));
+        if (!total) {
+          setStatus(elements.status, "No objects loaded yet.");
+          return;
+        }
+        const base = query
+          ? visible + " of " + total + " item(s) match the search."
+          : visible + " item(s) visible.";
+        setStatus(elements.status, base + (hasMore ? " More available." : ""));
+      }
+
+      function jobsItemLabel(job) {
+        return job.id.slice(0, 8) + " " + job.sourceResource + " -> " + job.destinationResource;
+      }
+
+      function jobsSortValue(job, key) {
+        if (key === "status") return job.status || "";
+        if (key === "files") return Number(job.totalFiles || 0);
+        if (key === "progress") return Number(job.processed || 0);
+        if (key === "details") return job.lastError || job.lastKey || job.message || "";
+        if (key === "route") return String(job.sourceResource || "") + " -> " + String(job.destinationResource || "");
+        if (key === "createdAt") return job.createdAt || "";
+        return job.id || "";
+      }
+
+      function compareJobs(left, right, sort) {
+        const direction = sort.direction === "desc" ? -1 : 1;
+        const leftValue = jobsSortValue(left, sort.key);
+        const rightValue = jobsSortValue(right, sort.key);
+        if (typeof leftValue === "number" && typeof rightValue === "number") {
+          return (leftValue - rightValue) * direction || compareText(jobsItemLabel(left), jobsItemLabel(right), direction);
+        }
+        return compareText(leftValue, rightValue, direction) || compareText(jobsItemLabel(left), jobsItemLabel(right), direction);
+      }
+
+      function searchJob(job) {
+        return [
+          job.id,
+          job.status,
+          job.sourceProvider,
+          job.sourceResource,
+          job.destinationProvider,
+          job.destinationResource,
+          job.lastKey,
+          job.lastError,
+          job.message,
+          String(job.totalFiles || ""),
+          String(job.copied || ""),
+          String(job.skipped || ""),
+          String(job.failed || ""),
+        ].filter(Boolean).join(" ").toLowerCase();
+      }
+
+      function getVisibleJobs() {
+        const sort = getJobsSort();
+        const query = normalizeSearchQuery(state.jobsSearch);
+        const jobs = state.jobs.slice().sort((left, right) => compareJobs(left, right, sort));
+        if (!query) {
+          return jobs;
+        }
+        return jobs.filter((job) => searchJob(job).includes(query));
+      }
+
+      function renderSortHeader(label, scope, key, sort) {
+        return '<button type="button" class="sort-toggle' + (sort.key === key ? " sort-toggle--active" : "") + '" data-sort-scope="' + escapeHtml(scope) + '" data-sort-key="' + escapeHtml(key) + '" aria-sort="' + escapeHtml(sort.key === key ? (sort.direction === "asc" ? "ascending" : "descending") : "none") + '">' +
+          escapeHtml(label) +
+          '<span class="sort-indicator">' + escapeHtml(sortIndicator(sort, key)) + "</span>" +
+        "</button>";
       }
 
       function log(message, kind = "info") {
@@ -856,18 +1115,40 @@ function renderHtml(): string {
 
       function renderSideList(side) {
         const elements = sideElements(side);
-        const items = sideItems(side);
+        const sort = getSideSort(side);
+        const items = getVisibleSideItems(side);
+        const totalItems = sideItems(side).length;
         const header = side === "source"
-          ? '<div class="list-head"><div><input class="check" type="checkbox" id="sourceSelectAll" title="Select all visible" /></div><div>Name</div><div class="size-col">Size</div><div>Modified</div></div>'
-          : '<div class="list-head"><div></div><div>Name</div><div class="size-col">Size</div><div>Modified</div></div>';
-        if (!items.length) {
+          ? '<div class="list-head"><div><input class="check" type="checkbox" id="sourceSelectAll" title="Select all visible" /></div><div>' + renderSortHeader("Name", side, "name", sort) + '</div><div class="size-col">' + renderSortHeader("Size", side, "size", sort) + '</div><div>' + renderSortHeader("Modified", side, "modified", sort) + '</div></div>'
+          : '<div class="list-head"><div></div><div>' + renderSortHeader("Name", side, "name", sort) + '</div><div class="size-col">' + renderSortHeader("Size", side, "size", sort) + '</div><div>' + renderSortHeader("Modified", side, "modified", sort) + '</div></div>';
+        if (!totalItems) {
           elements.list.innerHTML = header + '<div class="list-row"><div></div><div class="meta">No objects loaded yet.</div><div></div><div></div></div>';
+          elements.list.querySelectorAll("[data-sort-key]").forEach((button) => {
+            button.addEventListener("click", () => {
+              const key = button.getAttribute("data-sort-key");
+              if (!key) return;
+              setSideSort(side, key);
+              renderSideList(side);
+            });
+          });
+          updateSideStatus(side);
+          return;
+        }
+        if (!items.length) {
+          elements.list.innerHTML = header + '<div class="list-row"><div></div><div class="meta">No objects match the current search.</div><div></div><div></div></div>' + (sideContinuationToken(side) ? '<div class="list-row"><div></div><div><button class="secondary" id="loadMore' + (side === "source" ? "Source" : "Destination") + '">Load more</button></div><div></div><div></div></div>' : "");
+          elements.list.querySelectorAll("[data-sort-key]").forEach((button) => {
+            button.addEventListener("click", () => {
+              const key = button.getAttribute("data-sort-key");
+              if (!key) return;
+              setSideSort(side, key);
+              renderSideList(side);
+            });
+          });
+          updateSideStatus(side);
           return;
         }
         const rows = items.map((item) => {
-          const label = item.type === "folder"
-            ? item.key.replace(/\/+$/, "").split("/").pop() + "/"
-            : item.key.split("/").pop();
+          const label = sideItemLabel(item);
           const checked = side === "source" && state.sourceSelections.has(item.key) ? "checked" : "";
           return '<div class="list-row">' +
             (side === "source" ? '<div><input class="check" type="checkbox" data-key="' + escapeHtml(item.key) + '" ' + checked + ' /></div>' : '<div></div>') +
@@ -905,6 +1186,14 @@ function renderHtml(): string {
             });
           });
         }
+        elements.list.querySelectorAll("[data-sort-key]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const key = button.getAttribute("data-sort-key");
+            if (!key) return;
+            setSideSort(side, key);
+            renderSideList(side);
+          });
+        });
         elements.list.querySelectorAll("[data-open]").forEach((button) => {
           button.addEventListener("click", () => {
             const key = button.dataset.open || "";
@@ -919,27 +1208,63 @@ function renderHtml(): string {
         if (moreButton) {
           moreButton.addEventListener("click", () => loadPath(side, true));
         }
+        updateSideStatus(side);
       }
 
       function renderJobs() {
-        const header = '<div class="list-head"><div>Job</div><div>Status</div><div>Files</div><div>Progress</div><div>Details</div></div>';
+        const sort = getJobsSort();
+        const filteredJobs = getVisibleJobs();
+        const query = normalizeSearchQuery(state.jobsSearch);
+        const header = '<div class="list-head">' +
+          '<div>' + renderSortHeader("Job", "jobs", "createdAt", sort) + '</div>' +
+          '<div>' + renderSortHeader("Status", "jobs", "status", sort) + '</div>' +
+          '<div>' + renderSortHeader("Files", "jobs", "files", sort) + '</div>' +
+          '<div>' + renderSortHeader("Progress", "jobs", "progress", sort) + '</div>' +
+          '<div>' + renderSortHeader("Details", "jobs", "details", sort) + '</div>' +
+        '</div>';
         const queueNotice = state.transferQueueNotice;
         const totalJobs = Number.isFinite(state.jobsTotal) ? state.jobsTotal : state.jobs.length;
         const pageSize = Number.isFinite(state.jobsPageSize) && state.jobsPageSize > 0 ? state.jobsPageSize : 10;
         const totalPages = Math.max(1, Math.ceil((totalJobs || 0) / pageSize));
         const currentPage = Math.min(Math.max(1, state.jobsPage || 1), totalPages);
         state.jobsPage = currentPage;
-        els.jobsCount.textContent = totalJobs
-          ? "Showing jobs " + String((currentPage - 1) * pageSize + 1) + "-" + String(Math.min(currentPage * pageSize, totalJobs)) + " of " + String(totalJobs) + "."
+        const activeJobs = state.jobs.filter((job) => job.status === "running" || job.status === "queued");
+        els.jobsCount.textContent = query
+          ? (filteredJobs.length
+            ? "Showing " + String(filteredJobs.length) + " matching job(s) on this page."
+            : "No jobs on this page match the search.")
+          : totalJobs
+            ? "Showing jobs " + String((currentPage - 1) * pageSize + 1) + "-" + String(Math.min(currentPage * pageSize, totalJobs)) + " of " + String(totalJobs) + "."
           : "No background jobs running.";
         els.jobsPrev.disabled = currentPage <= 1;
         els.jobsNext.disabled = currentPage >= totalPages || totalJobs === 0;
         if (!state.jobs.length) {
           els.jobsList.innerHTML = header + '<div class="list-row"><div class="meta">No jobs yet.</div><div></div><div></div><div></div><div class="meta">Start a transfer to queue one.</div></div>';
+          els.jobsList.querySelectorAll("[data-sort-key]").forEach((button) => {
+            button.addEventListener("click", () => {
+              const key = button.getAttribute("data-sort-key");
+              if (!key) return;
+              setJobsSort(key);
+              renderJobs();
+            });
+          });
           els.jobsStatus.textContent = queueNotice || "No background jobs running.";
           return;
         }
-        els.jobsList.innerHTML = header + state.jobs.map((job) => {
+        if (!filteredJobs.length) {
+          els.jobsList.innerHTML = header + '<div class="list-row"><div class="meta">No jobs match the current search.</div><div></div><div></div><div></div><div class="meta">Try a different search term or clear the filter.</div></div>';
+          els.jobsList.querySelectorAll("[data-sort-key]").forEach((button) => {
+            button.addEventListener("click", () => {
+              const key = button.getAttribute("data-sort-key");
+              if (!key) return;
+              setJobsSort(key);
+              renderJobs();
+            });
+          });
+          els.jobsStatus.textContent = queueNotice || "No jobs on this page match the search.";
+          return;
+        }
+        els.jobsList.innerHTML = header + filteredJobs.map((job) => {
           const tone = job.status === "completed"
             ? (job.failed ? "warning" : "completed")
             : job.status === "failed"
@@ -959,12 +1284,19 @@ function renderHtml(): string {
           const progress = job.status === "completed"
             ? (progressParts.length ? progressParts.join(" / ") : "Completed")
             : (progressParts.length ? progressParts.join(" / ") : "Running");
+          const activeSummary = isActive ? formatJobActiveSummary(job) : null;
           const details = job.lastKey ? escapeHtml(job.lastKey) : escapeHtml(job.message || "");
           const route = providerLabel(job.sourceProvider) + " " + escapeHtml(job.sourceResource) + " -> " + providerLabel(job.destinationProvider) + " " + escapeHtml(job.destinationResource);
           const actionButton = isActive ? '<div class="job-actions"><button type="button" class="ghost mini" data-job-cancel="' + escapeHtml(job.id) + '">Cancel</button></div>' : "";
           const statusChip = '<span class="job-status-chip job-status-chip--' + tone + '">' + escapeHtml(statusLabel) + '</span>';
           const openHint = canOpenDetails ? '<div class="meta">Click to inspect details.</div>' : "";
           const rowAttrs = 'data-job-id="' + escapeHtml(job.id) + '"' + (canOpenDetails ? ' data-job-openable="1" tabindex="0" role="button" aria-expanded="' + (isExpanded ? "true" : "false") + '" title="Click to inspect details"' : "");
+          const progressMeta = isActive
+            ? '<div class="job-progress-meta"><div class="meta"><strong>' + escapeHtml(progress) + '</strong></div>' + (activeSummary && activeSummary.text ? '<div class="meta">' + escapeHtml(activeSummary.text) + '</div>' : '') + '</div>'
+            : '<div class="job-progress-meta"><div class="meta">' + escapeHtml(progress) + '</div></div>';
+          const progressBar = isActive
+            ? '<div class="job-progress-bar" aria-hidden="true"><span style="--progress:' + String(activeSummary ? activeSummary.progress : 0) + '%"></span></div>'
+            : "";
           const row = '<div class="list-row job-row job-row--' + tone + (canOpenDetails ? ' job-row--openable' : '') + (isExpanded ? ' job-row--expanded' : '') + '" ' + rowAttrs + '>' +
             '<div>' +
               '<div><strong>' + escapeHtml(job.id.slice(0, 8)) + '</strong></div>' +
@@ -972,13 +1304,28 @@ function renderHtml(): string {
             '</div>' +
             '<div class="meta">' + statusChip + '</div>' +
             '<div class="meta">' + escapeHtml(filesLabel) + '</div>' +
-            '<div class="meta">' + escapeHtml(progress) + '</div>' +
+            '<div class="job-progress">' + progressBar + progressMeta + '</div>' +
             '<div class="meta">' + details + (job.lastError ? '<div class="error">' + escapeHtml(job.lastError) + '</div>' : '') + openHint + actionButton + '</div>' +
           '</div>';
           return row + (canOpenDetails && isExpanded ? renderJobDetails(job) : "");
         }).join("");
-        const running = state.jobs.find((job) => job.status === "running" || job.status === "queued");
-        els.jobsStatus.textContent = queueNotice || (running ? "Latest active job: " + running.id : "No active jobs.");
+        els.jobsList.querySelectorAll("[data-sort-key]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const key = button.getAttribute("data-sort-key");
+            if (!key) return;
+            setJobsSort(key);
+            renderJobs();
+          });
+        });
+        const running = activeJobs.slice().sort((left, right) => compareText(right.updatedAt || "", left.updatedAt || "", 1))[0];
+        if (queueNotice) {
+          els.jobsStatus.textContent = queueNotice;
+        } else if (running) {
+          const summary = formatJobActiveSummary(running);
+          els.jobsStatus.textContent = String(activeJobs.length) + " active job(s) • " + running.id + (summary.text ? " • " + summary.text : "");
+        } else {
+          els.jobsStatus.textContent = "No active jobs.";
+        }
       }
 
       function renderJobDetails(job) {
@@ -1277,7 +1624,6 @@ function renderHtml(): string {
           setSideItems(side, append ? sideItems(side).concat(items) : items);
           setSideContinuationToken(side, nextContinuationToken);
           renderSideList(side);
-          setStatus(elements.status, String(sideItems(side).length) + " item(s) visible." + (sideContinuationToken(side) ? " More available." : ""));
           syncSummary();
         } catch (error) {
           setStatus(elements.status, "Could not load " + providerLabel(provider) + " contents.", "error");
@@ -1614,6 +1960,18 @@ function renderHtml(): string {
           event.preventDefault();
           void loadPath("destination", false);
         }
+      });
+      els.sourceSearch.addEventListener("input", () => {
+        setSideSearch("source", els.sourceSearch.value);
+        renderSideList("source");
+      });
+      els.destinationSearch.addEventListener("input", () => {
+        setSideSearch("destination", els.destinationSearch.value);
+        renderSideList("destination");
+      });
+      els.jobsSearch.addEventListener("input", () => {
+        state.jobsSearch = els.jobsSearch.value;
+        renderJobs();
       });
       els.sourceList.addEventListener("change", (event) => {
         const target = event.target;
