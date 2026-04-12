@@ -86,12 +86,6 @@ ghcr.io/Go-Vennture/s3-bunny-migration:main
 ghcr.io/Go-Vennture/s3-bunny-migration:<sha>
 ```
 
-To auto-apply updates in Bunny on every push, set these repository variables/secrets:
-
-- `BUNNY_MC_APP_ID`
-- `BUNNY_MC_CONTAINER`
-- `BUNNYNET_API_KEY`
-
 If you keep the GHCR package private, add your GitHub registry credentials in Bunny Magic Containers under Image Registries. If you make it public, Bunny can pull it without extra registry credentials.
 
 ## CLI
