@@ -3343,8 +3343,10 @@ export class TransferManager {
     );
     this.logEvent(id, "info", "Job queued");
     await this.schedule();
-    void this.processPendingJobs().catch((error) => {
-      this.logEvent(id, "error", `Job runner failed to start: ${(error as Error).message}`);
+    setImmediate(() => {
+      void this.processPendingJobs().catch((error) => {
+        this.logEvent(id, "error", `Job runner failed to start: ${(error as Error).message}`);
+      });
     });
     const job = await this.getJob(id);
     if (!job) {
