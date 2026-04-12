@@ -1,8 +1,9 @@
-import { DurableObject } from "cloudflare:workers";
-import { Client as SshClient, type ConnectConfig, type SFTPWrapper } from "ssh2";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { FAVICON_BASE64 } from "./favicon-data";
+import { resolve } from "node:path";
+import { FAVICON_BASE64 } from "./favicon-data.js";
 
 type AwsCredentials = {
   accessKeyId: string;
@@ -92,7 +93,6 @@ type TransferConflictPreview = {
 };
 
 const SAFE_COPY_CONCURRENCY = 4;
-const LARGE_FILE_BUNNY_THRESHOLD_BYTES = 100 * 1024 * 1024;
 
 type ResolvedBunnyZone = BunnyZone & {
   password: string;
@@ -152,15 +152,83 @@ type TransferJobDetail = TransferJobSummary & {
   events: TransferJobEvent[];
 };
 
-type AppEnv = Omit<Env, "TRANSFER_MANAGER"> & {
-  TRANSFER_MANAGER: DurableObjectNamespace<TransferManager>;
-};
-
 type TransferJobPageState = {
   keys: string[];
   index: number;
   continuationToken?: string | null;
 };
+
+type NodeSqlResult<T> = {
+  toArray(): T[];
+};
+
+type NodeSqlFacade = {
+  exec<T = unknown>(sql: string, ...params: unknown[]): NodeSqlResult<T>;
+};
+
+type NodeTransferContext = {
+  storage: {
+    sql: NodeSqlFacade;
+    setAlarm(time: number): Promise<void>;
+    deleteAlarm(): Promise<void>;
+  };
+  blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
+};
+
+class SqlQueryResult<T> implements NodeSqlResult<T> {
+  constructor(private readonly rows: T[]) {}
+
+  toArray(): T[] {
+    return this.rows;
+  }
+}
+
+class SqlFacadeImpl implements NodeSqlFacade {
+  constructor(private readonly db: DatabaseSync) {}
+
+  exec<T = unknown>(sql: string, ...params: unknown[]): NodeSqlResult<T> {
+    const statement = this.db.prepare(sql);
+    if (/^\s*(select|pragma|with|explain)\b/i.test(sql)) {
+      return new SqlQueryResult(statement.all(...(params as any[])) as T[]);
+    }
+    statement.run(...(params as any[]));
+    return new SqlQueryResult<T>([]);
+  }
+}
+
+class NodeTransferStorage {
+  sql: NodeSqlFacade;
+  private alarmTimer: ReturnType<typeof setTimeout> | null = null;
+  private manager: TransferManager | null = null;
+
+  constructor(db: DatabaseSync) {
+    this.sql = new SqlFacadeImpl(db);
+  }
+
+  bindManager(manager: TransferManager): void {
+    this.manager = manager;
+  }
+
+  async setAlarm(time: number): Promise<void> {
+    if (this.alarmTimer) {
+      clearTimeout(this.alarmTimer);
+      this.alarmTimer = null;
+    }
+    const delay = Math.max(0, time - Date.now());
+    this.alarmTimer = setTimeout(() => {
+      void this.manager?.alarm();
+    }, delay);
+  }
+
+  async deleteAlarm(): Promise<void> {
+    if (this.alarmTimer) {
+      clearTimeout(this.alarmTimer);
+      this.alarmTimer = null;
+    }
+  }
+}
+
+let transferManager: TransferManager;
 
 type TransferJobRow = {
   id: string;
@@ -220,28 +288,26 @@ const REGION_ENDPOINTS: Record<string, string> = {
   "sydney, syd": "syd.storage.bunnycdn.com",
 };
 
-export default {
-  async fetch(request: Request, env: AppEnv): Promise<Response> {
-    const url = new URL(request.url);
-    try {
-      if (request.method === "GET" && url.pathname === "/") return new Response(renderHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
-      if (request.method === "GET" && url.pathname === "/favicon.ico") return faviconResponse();
-      if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
-      if (request.method === "POST" && url.pathname === "/api/aws/buckets") return json({ buckets: await listAwsBuckets(await parseAwsCredentials(request)) });
-      if (request.method === "POST" && url.pathname === "/api/aws/list") return await handleAwsList(request);
-      if (request.method === "POST" && url.pathname === "/api/bunny/zones") return await handleBunnyZones(request);
-      if (request.method === "POST" && url.pathname === "/api/bunny/list") return await handleBunnyList(request);
-      if (request.method === "POST" && url.pathname === "/api/transfer") return await handleTransfer(request, env);
-      if (request.method === "POST" && url.pathname === "/api/jobs/cancel") return await handleJobCancel(request, env);
-      if (request.method === "POST" && url.pathname === "/api/jobs/retry") return await handleJobRetry(request, env);
-      if (request.method === "GET" && url.pathname === "/api/jobs") return await handleJobs(request, env);
-      return new Response("Not found", { status: 404 });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return json({ error: message }, { status: 500 });
-    }
-  },
-} satisfies ExportedHandler<AppEnv>;
+async function handleRequest(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  try {
+    if (request.method === "GET" && url.pathname === "/") return new Response(renderHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
+    if (request.method === "GET" && url.pathname === "/favicon.ico") return faviconResponse();
+    if (request.method === "GET" && url.pathname === "/health") return json({ ok: true });
+    if (request.method === "POST" && url.pathname === "/api/aws/buckets") return json({ buckets: await listAwsBuckets(await parseAwsCredentials(request)) });
+    if (request.method === "POST" && url.pathname === "/api/aws/list") return await handleAwsList(request);
+    if (request.method === "POST" && url.pathname === "/api/bunny/zones") return await handleBunnyZones(request);
+    if (request.method === "POST" && url.pathname === "/api/bunny/list") return await handleBunnyList(request);
+    if (request.method === "POST" && url.pathname === "/api/transfer") return await handleTransfer(request);
+    if (request.method === "POST" && url.pathname === "/api/jobs/cancel") return await handleJobCancel(request);
+    if (request.method === "POST" && url.pathname === "/api/jobs/retry") return await handleJobRetry(request);
+    if (request.method === "GET" && url.pathname === "/api/jobs") return await handleJobs(request);
+    return new Response("Not found", { status: 404 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return json({ error: message }, { status: 500 });
+  }
+}
 
 function renderHtml(): string {
   return String.raw`<!doctype html>
@@ -519,7 +585,7 @@ function renderHtml(): string {
       </div>
       <div class="transfer-card">
         <h3>Background jobs</h3>
-        <div class="inline-note">Queued jobs keep running in the Durable Object and you can watch progress here.</div>
+        <div class="inline-note">Queued jobs keep running in the background job runner and you can watch progress here.</div>
         <div class="table-toolbar">
           <div class="field table-search">
             <label for="jobsSearch">Search jobs</label>
@@ -2049,7 +2115,7 @@ async function handleBunnyList(request: Request): Promise<Response> {
   return json({ items: await listBunnyObjects(zone, region, path) });
 }
 
-async function handleTransfer(request: Request, env: AppEnv): Promise<Response> {
+async function handleTransfer(request: Request): Promise<Response> {
   const transfer = parseTransferRequest(await parseJson(request));
   const [source, destination] = await Promise.all([
     resolveStorageResource(transfer.bunnyApiKey, transfer.source),
@@ -2078,8 +2144,7 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
     };
     return json(body, { status: preview.conflicts.length ? 409 : 200 });
   }
-  const manager = getTransferManagerStub(env);
-  const job = await manager.createJob({
+  const job = await transferManager.createJob({
     aws,
     awsRegion,
     source,
@@ -2093,40 +2158,38 @@ async function handleTransfer(request: Request, env: AppEnv): Promise<Response> 
   return json({ job }, { status: 202 });
 }
 
-async function handleJobs(request: Request, env: AppEnv): Promise<Response> {
+async function handleJobs(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const manager = getTransferManagerStub(env);
   if (url.searchParams.get("cleanupFailed") === "1") {
-    await manager.clearFailedJobs();
+    await transferManager.clearFailedJobs();
   }
   const page = Math.max(1, Number(url.searchParams.get("page") || "1") || 1);
   const jobId = url.searchParams.get("jobId");
   if (jobId) {
-    const job = await manager.getJob(jobId);
+    const job = await transferManager.getJob(jobId);
     if (!job) {
       return json({ error: "Job not found" }, { status: 404 });
     }
     return json({ job });
   }
-  return json(await manager.listJobs(page));
+  return json(await transferManager.listJobs(page));
 }
 
-async function handleJobCancel(request: Request, env: AppEnv): Promise<Response> {
+async function handleJobCancel(request: Request): Promise<Response> {
   const body = await parseJson(request);
   const obj = body as Record<string, unknown>;
   const jobId = typeof obj.jobId === "string" ? obj.jobId.trim() : "";
   if (!jobId) {
     throw new Error("Missing jobId.");
   }
-  const manager = getTransferManagerStub(env);
-  const job = await manager.cancelJob(jobId);
+  const job = await transferManager.cancelJob(jobId);
   if (!job) {
     return json({ error: "Job not found" }, { status: 404 });
   }
   return json({ job });
 }
 
-async function handleJobRetry(request: Request, env: AppEnv): Promise<Response> {
+async function handleJobRetry(request: Request): Promise<Response> {
   const body = await parseJson(request);
   const obj = body as Record<string, unknown>;
   const jobId = typeof obj.jobId === "string" ? obj.jobId.trim() : "";
@@ -2137,8 +2200,7 @@ async function handleJobRetry(request: Request, env: AppEnv): Promise<Response> 
   if (!subjectKey) {
     throw new Error("Missing subjectKey.");
   }
-  const manager = getTransferManagerStub(env);
-  const job = await manager.retryJobItem(jobId, subjectKey);
+  const job = await transferManager.retryJobItem(jobId, subjectKey);
   if (!job) {
     return json({ error: "Job not found" }, { status: 404 });
   }
@@ -2157,10 +2219,6 @@ function resolveTransferAwsRegion(
     return destination.region;
   }
   return fallbackRegion || "us-east-1";
-}
-
-function getTransferManagerStub(env: AppEnv): DurableObjectStub<TransferManager> {
-  return env.TRANSFER_MANAGER.getByName("transfer-manager");
 }
 
 function faviconResponse(): Response {
@@ -2349,7 +2407,11 @@ async function signedS3RequestToHost(
       secretAccessKey: creds.secretAccessKey,
     }),
   );
-  return fetch(url, { method, headers, body });
+  const requestInit: RequestInit & { duplex?: "half" } = { method, headers, body };
+  if (body instanceof ReadableStream) {
+    requestInit.duplex = "half";
+  }
+  return fetch(url, requestInit);
 }
 
 async function signAwsRequest(params: {
@@ -2915,11 +2977,6 @@ async function writeStorageObject(
     await putAwsObject(aws, resource.name, resource.region, key, body, contentType);
     return;
   }
-  const parsedLength = Number(contentLength);
-  if (body instanceof ReadableStream && Number.isFinite(parsedLength) && parsedLength >= LARGE_FILE_BUNNY_THRESHOLD_BYTES) {
-    await putBunnySftpObject(resource, key, body);
-    return;
-  }
   await putBunnyObject(resource, key, body, contentType, contentLength);
 }
 
@@ -3003,82 +3060,25 @@ async function putBunnyObject(
     AccessKey: resource.password || "",
     "Content-Type": contentType,
   });
-  const requestUrl = `https://${endpoint}${bunnyObjectPath(resource.name, key)}`;
-  let requestBody = body;
-  let pipePromise: Promise<void> | null = null;
-  if (body instanceof ReadableStream && contentLength) {
-    const length = Number(contentLength);
-    if (Number.isFinite(length) && length >= 0) {
-      const fixedLength = new FixedLengthStream(length);
-      pipePromise = body.pipeTo(fixedLength.writable);
-      requestBody = fixedLength.readable;
-    }
+  if (contentLength) {
+    headers.set("Content-Length", contentLength);
   }
-  const uploadRequest = new Request(requestUrl, {
+  const requestUrl = `https://${endpoint}${bunnyObjectPath(resource.name, key)}`;
+  const uploadRequestInit: RequestInit & { duplex?: "half" } = {
     method: "PUT",
     headers,
-    body: requestBody,
-  });
+    body,
+  };
+  if (body instanceof ReadableStream) {
+    uploadRequestInit.duplex = "half";
+  }
+  const uploadRequest = new Request(requestUrl, uploadRequestInit);
   const uploadPromise = fetch(uploadRequest);
   const upload = await uploadPromise;
-  if (pipePromise) {
-    await pipePromise;
-  }
   if (!upload.ok && upload.status !== 201) {
     const message = await upload.text();
     throw new Error(message || `Bunny upload failed with status ${upload.status}.`);
   }
-}
-
-async function putBunnySftpObject(
-  resource: ResolvedStorageResource,
-  key: string,
-  body: ReadableStream,
-): Promise<void> {
-  const password = resource.password || "";
-  if (!password) {
-    throw new Error("Missing Bunny storage password for SFTP upload.");
-  }
-
-  const endpoint = bunnyEndpointForRegion(resource.region);
-  const client = new SshClient();
-  try {
-    await connectSshClient(client, {
-      host: endpoint,
-      port: 22,
-      username: resource.name,
-      password,
-      readyTimeout: 30_000,
-    });
-    const sftp = await openSftpSession(client);
-    const sourceStream = Readable.fromWeb(body as unknown as import("node:stream/web").ReadableStream<Uint8Array>);
-    const destinationStream = sftp.createWriteStream(bunnySftpPath(key));
-    await pipeline(sourceStream, destinationStream);
-  } catch (error) {
-    throw new Error(`Bunny SFTP upload failed: ${(error as Error).message}`);
-  } finally {
-    client.end();
-  }
-}
-
-function connectSshClient(client: SshClient, config: ConnectConfig): Promise<void> {
-  return new Promise((resolve, reject) => {
-    client.once("ready", () => resolve());
-    client.once("error", reject);
-    client.connect(config);
-  });
-}
-
-function openSftpSession(client: SshClient): Promise<SFTPWrapper> {
-  return new Promise((resolve, reject) => {
-    client.sftp((error, sftp) => {
-      if (error || !sftp) {
-        reject(error || new Error("Failed to open SFTP session."));
-        return;
-      }
-      resolve(sftp);
-    });
-  });
 }
 
 async function listAllBunnyFiles(resource: ResolvedStorageResource, prefix: string): Promise<S3Item[]> {
@@ -3118,15 +3118,6 @@ function bunnyObjectPath(zoneName: string, key: string): string {
     .map((segment) => encodeURIComponent(segment))
     .join("/");
   return cleanKey ? `/${encodedZone}/${cleanKey}` : `/${encodedZone}`;
-}
-
-function bunnySftpPath(key: string): string {
-  const cleanKey = key
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .join("/");
-  return cleanKey ? `/${cleanKey}` : "/";
 }
 
 async function resolveStorageResource(apiKey: string, resource: StorageResourceRef): Promise<ResolvedStorageResource> {
@@ -3178,10 +3169,12 @@ function encodeBunnyPath(path: string): string {
     .join("/");
 }
 
-export class TransferManager extends DurableObject<Env> {
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    ctx.blockConcurrencyWhile(async () => {
+export class TransferManager {
+  public readonly ready: Promise<void>;
+  private processing = false;
+
+  constructor(private readonly ctx: NodeTransferContext) {
+    this.ready = this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS jobs (
           id TEXT PRIMARY KEY,
@@ -3270,6 +3263,7 @@ export class TransferManager extends DurableObject<Env> {
   }
 
   async createJob(input: TransferJobCreateRequest): Promise<TransferJobDetail> {
+    await this.ready;
     const id = crypto.randomUUID();
     const now = Date.now();
     this.ctx.storage.sql.exec(
@@ -3331,6 +3325,7 @@ export class TransferManager extends DurableObject<Env> {
   }
 
   async listJobs(page = 1, pageSize = 10): Promise<{ jobs: TransferJobSummary[]; page: number; pageSize: number; totalJobs: number; totalPages: number }> {
+    await this.ready;
     const normalizedPageSize = Math.max(1, Math.min(10, Math.floor(pageSize) || 10));
     const totalResult = this.ctx.storage.sql.exec<{ total: number }>(`SELECT COUNT(*) AS total FROM jobs`);
     const totalJobs = Number(totalResult.toArray()[0]?.total || 0);
@@ -3345,11 +3340,13 @@ export class TransferManager extends DurableObject<Env> {
   }
 
   async clearFailedJobs(): Promise<void> {
+    await this.ready;
     this.ctx.storage.sql.exec(`DELETE FROM job_events WHERE job_id IN (SELECT id FROM jobs WHERE status = 'failed')`);
     this.ctx.storage.sql.exec(`DELETE FROM jobs WHERE status = 'failed'`);
   }
 
   async cancelJob(jobId: string): Promise<TransferJobDetail | null> {
+    await this.ready;
     const job = this.getJobRow(jobId);
     if (!job) {
       return null;
@@ -3370,6 +3367,7 @@ export class TransferManager extends DurableObject<Env> {
   }
 
   async retryJobItem(jobId: string, subjectKey: string): Promise<TransferJobDetail | null> {
+    await this.ready;
     const job = this.getJobRow(jobId);
     if (!job) {
       return null;
@@ -3419,6 +3417,7 @@ export class TransferManager extends DurableObject<Env> {
   }
 
   async getJob(jobId: string): Promise<TransferJobDetail | null> {
+    await this.ready;
     const cursor = this.ctx.storage.sql.exec<TransferJobRow>(`SELECT * FROM jobs WHERE id = ? LIMIT 1`, jobId);
     const row = cursor.toArray()[0];
     if (!row) {
@@ -3428,24 +3427,40 @@ export class TransferManager extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    await this.ready;
     await this.processPendingJobs();
   }
 
+  kick(): void {
+    void this.processPendingJobs().catch((error) => {
+      console.error("Job runner failed:", error);
+    });
+  }
+
   private async processPendingJobs(): Promise<void> {
-    const started = Date.now();
-    while (Date.now() - started < 20_000) {
-      const job = this.nextRunnableJob();
-      if (!job) {
-        await this.ctx.storage.deleteAlarm();
-        return;
-      }
-      const completed = await this.processJob(job);
-      if (!completed) {
-        await this.schedule();
-        return;
-      }
+    await this.ready;
+    if (this.processing) {
+      return;
     }
-    await this.schedule();
+    this.processing = true;
+    try {
+      const started = Date.now();
+      while (Date.now() - started < 20_000) {
+        const job = this.nextRunnableJob();
+        if (!job) {
+          await this.ctx.storage.deleteAlarm();
+          return;
+        }
+        const completed = await this.processJob(job);
+        if (!completed) {
+          await this.schedule();
+          return;
+        }
+      }
+      await this.schedule();
+    } finally {
+      this.processing = false;
+    }
   }
 
   private nextRunnableJob(): TransferJobRow | null {
@@ -3807,5 +3822,95 @@ export class TransferManager extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now() + 1_000);
   }
 }
+
+const DATA_DIR = process.env.DATA_DIR || resolve(process.cwd(), "data");
+const DB_PATH = process.env.DB_PATH || resolve(DATA_DIR, "transfer.sqlite");
+mkdirSync(DATA_DIR, { recursive: true });
+const database = new DatabaseSync(DB_PATH);
+const nodeStorage = new NodeTransferStorage(database);
+transferManager = new TransferManager({
+  storage: nodeStorage,
+  blockConcurrencyWhile: async (callback) => callback(),
+});
+nodeStorage.bindManager(transferManager);
+
+async function handleNodeHttpRequest(request: Request): Promise<Response> {
+  return handleRequest(request);
+}
+
+async function startServer(): Promise<void> {
+  await transferManager.ready;
+  transferManager.kick();
+  const port = Number(process.env.PORT || 8787);
+  const host = process.env.HOST || "0.0.0.0";
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const request = await toRequest(req, `http://${req.headers.host || `${host}:${port}`}${req.url || "/"}`);
+      const response = await handleNodeHttpRequest(request);
+      await writeNodeResponse(res, response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const response = json({ error: message }, { status: 500 });
+      await writeNodeResponse(res, response);
+    }
+  });
+  server.listen(port, host, () => {
+    console.log(`Listening on http://${host}:${port}`);
+  });
+  const shutdown = () => {
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+}
+
+async function toRequest(req: IncomingMessage, url: string): Promise<Request> {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        headers.append(key, item);
+      }
+      continue;
+    }
+    headers.set(key, value);
+  }
+  const method = req.method || "GET";
+  const streamingBody = method === "GET" || method === "HEAD" ? undefined : (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>);
+  const init: RequestInit & { duplex?: "half" } = { method, headers, body: streamingBody as unknown as BodyInit };
+  if (streamingBody) {
+    init.duplex = "half";
+  }
+  return new Request(url, init);
+}
+
+async function writeNodeResponse(res: ServerResponse, response: Response): Promise<void> {
+  res.statusCode = response.status;
+  res.statusMessage = response.statusText || res.statusMessage;
+  response.headers.forEach((value, key) => {
+    res.setHeader(key, value);
+  });
+  if (!response.body) {
+    res.end();
+    return;
+  }
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    const stream = Readable.fromWeb(response.body as any);
+    stream.on("error", rejectPromise);
+    res.on("error", rejectPromise);
+    res.on("close", resolvePromise);
+    stream.pipe(res);
+  });
+}
+
+void startServer().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 
 

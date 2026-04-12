@@ -3,21 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "check": "wrangler check",
-    "types": "wrangler types",
+    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build && node --watch dist/index.js",
+    "start": "node dist/index.js",
+    "check": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "cli": "node ./cli.mjs",
-    "postinstall": "node ./scripts/patch-ssh2.mjs"
+    "cli": "node ./cli.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/ssh2": "^1.15.5",
-    "typescript": "^5.8.3",
-    "wrangler": "^4.14.0"
+    "typescript": "^5.8.3"
   },
-  "dependencies": {
-    "ssh2": "^1.17.0"
-  }
+  "dependencies": {}
 }

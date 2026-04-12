@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const DEFAULT_WORKER_URL = process.env.S3_BUNNY_WORKER_URL || "http://127.0.0.1:8787";
+const DEFAULT_API_URL = process.env.S3_BUNNY_API_URL || process.env.S3_BUNNY_WORKER_URL || "http://127.0.0.1:8787";
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -20,38 +20,38 @@ async function main() {
 
   const configPath = parsed.flags.config || parsed.flags.c || process.env.S3_BUNNY_CONFIG;
   const config = configPath ? await loadConfig(configPath) : {};
-  const workerUrl = String(parsed.flags["worker-url"] || config.workerUrl || DEFAULT_WORKER_URL).replace(/\/+$/, "");
+  const apiUrl = String(parsed.flags["api-url"] || parsed.flags["worker-url"] || config.apiUrl || config.workerUrl || DEFAULT_API_URL).replace(/\/+$/, "");
 
   switch (command) {
     case "preview":
-      await runPreview(workerUrl, buildTransferInput(config, parsed.flags, true));
+      await runPreview(apiUrl, buildTransferInput(config, parsed.flags, true));
       return;
     case "move":
-      await runMove(workerUrl, buildTransferInput(config, parsed.flags, false), parsed.flags);
+      await runMove(apiUrl, buildTransferInput(config, parsed.flags, false), parsed.flags);
       return;
     case "jobs":
-      await runJobs(workerUrl, parsed.flags);
+      await runJobs(apiUrl, parsed.flags);
       return;
     case "job":
-      await runJob(workerUrl, parsed.flags);
+      await runJob(apiUrl, parsed.flags);
       return;
     case "cancel":
-      await runCancel(workerUrl, parsed.flags);
+      await runCancel(apiUrl, parsed.flags);
       return;
     case "retry":
-      await runRetry(workerUrl, parsed.flags);
+      await runRetry(apiUrl, parsed.flags);
       return;
     case "aws-buckets":
-      await runAwsBuckets(workerUrl, config, parsed.flags);
+      await runAwsBuckets(apiUrl, config, parsed.flags);
       return;
     case "bunny-zones":
-      await runBunnyZones(workerUrl, config, parsed.flags);
+      await runBunnyZones(apiUrl, config, parsed.flags);
       return;
     case "aws-list":
-      await runAwsList(workerUrl, config, parsed.flags);
+      await runAwsList(apiUrl, config, parsed.flags);
       return;
     case "bunny-list":
-      await runBunnyList(workerUrl, config, parsed.flags);
+      await runBunnyList(apiUrl, config, parsed.flags);
       return;
     default:
       throw new Error(`Unknown command "${command}".`);
@@ -74,7 +74,7 @@ function printUsage() {
     "",
     "Config file shape:",
     JSON.stringify({
-      workerUrl: "http://127.0.0.1:8787",
+      apiUrl: "http://127.0.0.1:8787",
       aws: {
         accessKeyId: "AKIA...",
         secretAccessKey: "secret",
@@ -167,8 +167,8 @@ function buildTransferInput(config, flags, previewOnly) {
   };
 }
 
-async function runPreview(workerUrl, transfer) {
-  const result = await postJson(`${workerUrl}/api/transfer`, { ...transfer, previewOnly: true });
+async function runPreview(apiUrl, transfer) {
+  const result = await postJson(`${apiUrl}/api/transfer`, { ...transfer, previewOnly: true });
   const conflicts = Array.isArray(result.payload?.conflicts) ? result.payload.conflicts.map(String) : [];
   const conflictCount = Number(result.payload?.conflictCount || conflicts.length || 0);
   const plannedFiles = Number(result.payload?.plannedFiles || 0);
@@ -182,60 +182,60 @@ async function runPreview(workerUrl, transfer) {
   }
 }
 
-async function runMove(workerUrl, transfer, flags) {
+async function runMove(apiUrl, transfer, flags) {
   const wait = flags["no-wait"] ? false : true;
-  const preview = await postJson(`${workerUrl}/api/transfer`, { ...transfer, previewOnly: true });
+  const preview = await postJson(`${apiUrl}/api/transfer`, { ...transfer, previewOnly: true });
   if (!preview.response.ok && preview.response.status !== 409) {
     throw new Error(`Preview failed: ${preview.response.status} ${preview.response.statusText}`);
   }
   const plannedFiles = Number(preview.payload?.plannedFiles || 0);
-  const queued = await postJson(`${workerUrl}/api/transfer`, {
+  const queued = await postJson(`${apiUrl}/api/transfer`, {
     ...transfer,
     totalFiles: plannedFiles || transfer.totalFiles,
   });
   const job = queued.payload?.job;
   if (!job || !job.id) {
-    throw new Error("Worker did not return a job id.");
+    throw new Error("Service did not return a job id.");
   }
   console.log(`Queued job ${job.id}`);
   if (!wait) {
     return;
   }
-  await waitForJob(workerUrl, job.id);
+  await waitForJob(apiUrl, job.id);
 }
 
-async function runJobs(workerUrl, flags) {
+async function runJobs(apiUrl, flags) {
   const page = String(flags.page || "1");
-  const result = await getJson(`${workerUrl}/api/jobs?page=${encodeURIComponent(page)}`);
+  const result = await getJson(`${apiUrl}/api/jobs?page=${encodeURIComponent(page)}`);
   printJson(result.payload);
 }
 
-async function runJob(workerUrl, flags) {
+async function runJob(apiUrl, flags) {
   const jobId = String(flags["job-id"] || flags.jobId || "");
   if (!jobId) throw new Error("Missing --job-id.");
-  const result = await getJson(`${workerUrl}/api/jobs?jobId=${encodeURIComponent(jobId)}`);
+  const result = await getJson(`${apiUrl}/api/jobs?jobId=${encodeURIComponent(jobId)}`);
   printJson(result.payload);
 }
 
-async function runCancel(workerUrl, flags) {
+async function runCancel(apiUrl, flags) {
   const jobId = String(flags["job-id"] || flags.jobId || "");
   if (!jobId) throw new Error("Missing --job-id.");
-  const result = await postJson(`${workerUrl}/api/jobs/cancel`, { jobId });
+  const result = await postJson(`${apiUrl}/api/jobs/cancel`, { jobId });
   printJson(result.payload);
 }
 
-async function runRetry(workerUrl, flags) {
+async function runRetry(apiUrl, flags) {
   const jobId = String(flags["job-id"] || flags.jobId || "");
   const subjectKey = String(flags["subject-key"] || flags.subjectKey || "");
   if (!jobId) throw new Error("Missing --job-id.");
   if (!subjectKey) throw new Error("Missing --subject-key.");
-  const result = await postJson(`${workerUrl}/api/jobs/retry`, { jobId, subjectKey });
+  const result = await postJson(`${apiUrl}/api/jobs/retry`, { jobId, subjectKey });
   printJson(result.payload);
 }
 
-async function runAwsBuckets(workerUrl, config, flags) {
+async function runAwsBuckets(apiUrl, config, flags) {
   const aws = config.aws || {};
-  const result = await postJson(`${workerUrl}/api/aws/buckets`, {
+  const result = await postJson(`${apiUrl}/api/aws/buckets`, {
     accessKeyId: String(flags["aws-access-key-id"] || aws.accessKeyId || process.env.AWS_ACCESS_KEY_ID || ""),
     secretAccessKey: String(flags["aws-secret-access-key"] || aws.secretAccessKey || process.env.AWS_SECRET_ACCESS_KEY || ""),
     sessionToken: String(flags["aws-session-token"] || aws.sessionToken || process.env.AWS_SESSION_TOKEN || "").trim() || undefined,
@@ -244,19 +244,19 @@ async function runAwsBuckets(workerUrl, config, flags) {
   printJson(result.payload);
 }
 
-async function runBunnyZones(workerUrl, config, flags) {
+async function runBunnyZones(apiUrl, config, flags) {
   const apiKey = String(flags["bunny-api-key"] || config.bunnyApiKey || process.env.BUNNY_API_KEY || "");
   if (!apiKey) throw new Error("Missing Bunny API key.");
-  const result = await postJson(`${workerUrl}/api/bunny/zones`, { apiKey });
+  const result = await postJson(`${apiUrl}/api/bunny/zones`, { apiKey });
   printJson(result.payload);
 }
 
-async function runAwsList(workerUrl, config, flags) {
+async function runAwsList(apiUrl, config, flags) {
   const aws = config.aws || {};
   const bucket = String(flags.bucket || flags.b || config.source?.name || "");
   const prefix = String(flags.prefix || config.sourcePrefix || "");
   if (!bucket) throw new Error("Missing --bucket.");
-  const result = await postJson(`${workerUrl}/api/aws/list`, {
+  const result = await postJson(`${apiUrl}/api/aws/list`, {
     accessKeyId: String(flags["aws-access-key-id"] || aws.accessKeyId || process.env.AWS_ACCESS_KEY_ID || ""),
     secretAccessKey: String(flags["aws-secret-access-key"] || aws.secretAccessKey || process.env.AWS_SECRET_ACCESS_KEY || ""),
     sessionToken: String(flags["aws-session-token"] || aws.sessionToken || process.env.AWS_SESSION_TOKEN || "").trim() || undefined,
@@ -267,21 +267,21 @@ async function runAwsList(workerUrl, config, flags) {
   printJson(result.payload);
 }
 
-async function runBunnyList(workerUrl, config, flags) {
+async function runBunnyList(apiUrl, config, flags) {
   const apiKey = String(flags["bunny-api-key"] || config.bunnyApiKey || process.env.BUNNY_API_KEY || "");
   const zoneName = String(flags.zone || flags["zone-name"] || config.destination?.name || "");
   const region = String(flags.region || config.destination?.region || "");
   const path = String(flags.path || config.destinationPrefix || "");
   if (!apiKey) throw new Error("Missing Bunny API key.");
   if (!zoneName) throw new Error("Missing --zone.");
-  const result = await postJson(`${workerUrl}/api/bunny/list`, { apiKey, zoneName, region, path });
+  const result = await postJson(`${apiUrl}/api/bunny/list`, { apiKey, zoneName, region, path });
   printJson(result.payload);
 }
 
-async function waitForJob(workerUrl, jobId) {
+async function waitForJob(apiUrl, jobId) {
   let lastSnapshot = "";
   for (;;) {
-    const result = await getJson(`${workerUrl}/api/jobs?jobId=${encodeURIComponent(jobId)}`);
+    const result = await getJson(`${apiUrl}/api/jobs?jobId=${encodeURIComponent(jobId)}`);
     const job = result.payload?.job;
     if (!job) {
       throw new Error("Job not found.");
