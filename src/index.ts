@@ -137,6 +137,7 @@ type TransferJobEvent = {
   createdAt: string;
   level: string;
   message: string;
+  subjectKey?: string;
 };
 
 type TransferJobDetail = TransferJobSummary & {
@@ -226,6 +227,7 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/bunny/list") return await handleBunnyList(request);
       if (request.method === "POST" && url.pathname === "/api/transfer") return await handleTransfer(request, env);
       if (request.method === "POST" && url.pathname === "/api/jobs/cancel") return await handleJobCancel(request, env);
+      if (request.method === "POST" && url.pathname === "/api/jobs/retry") return await handleJobRetry(request, env);
       if (request.method === "GET" && url.pathname === "/api/jobs") return await handleJobs(request, env);
       return new Response("Not found", { status: 404 });
     } catch (error) {
@@ -344,6 +346,10 @@ function renderHtml(): string {
     .job-detail-events{display:grid;gap:8px}
     .job-detail-event{display:grid;gap:4px;padding:10px 12px;border-radius:12px;background:rgba(10,16,34,.92);border:1px solid rgba(42,57,111,.35)}
     .job-detail-event--error{border-color:rgba(255,107,107,.38);background:rgba(255,107,107,.08)}
+    .job-detail-event-row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+    .job-detail-event-body{display:grid;gap:4px;min-width:0}
+    .job-detail-event-actions{display:flex;gap:8px;flex:0 0 auto}
+    .job-detail-event-actions .mini{min-height:30px;padding:6px 10px;font-size:12px}
     .job-detail-event strong{font-size:12px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
     .job-detail-event span{white-space:normal;overflow:visible;text-overflow:clip;font-size:13px;line-height:1.45}
     .job-status-chip{display:inline-flex;align-items:center;max-width:100%;padding:4px 9px;border-radius:999px;border:1px solid transparent;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -935,7 +941,7 @@ function renderHtml(): string {
                 : "processing";
           const statusLabel = job.status === "completed" && job.failed ? "completed with warnings" : job.status;
           const isActive = job.status === "queued" || job.status === "running";
-          const canOpenDetails = job.status === "completed" && job.failed > 0;
+          const canOpenDetails = (job.status === "completed" && job.failed > 0) || job.status === "failed";
           const isExpanded = state.expandedJobId === job.id;
           const filesLabel = Number.isFinite(job.totalFiles) && job.totalFiles > 0 ? String(job.totalFiles) : "—";
           const progressParts = [];
@@ -949,8 +955,8 @@ function renderHtml(): string {
           const route = providerLabel(job.sourceProvider) + " " + escapeHtml(job.sourceResource) + " -> " + providerLabel(job.destinationProvider) + " " + escapeHtml(job.destinationResource);
           const actionButton = isActive ? '<div class="job-actions"><button type="button" class="ghost mini" data-job-cancel="' + escapeHtml(job.id) + '">Cancel</button></div>' : "";
           const statusChip = '<span class="job-status-chip job-status-chip--' + tone + '">' + escapeHtml(statusLabel) + '</span>';
-          const openHint = canOpenDetails ? '<div class="meta">Click to inspect warning details.</div>' : "";
-          const rowAttrs = 'data-job-id="' + escapeHtml(job.id) + '"' + (canOpenDetails ? ' data-job-openable="1" tabindex="0" role="button" aria-expanded="' + (isExpanded ? "true" : "false") + '" title="Click to inspect warning details"' : "");
+          const openHint = canOpenDetails ? '<div class="meta">Click to inspect details.</div>' : "";
+          const rowAttrs = 'data-job-id="' + escapeHtml(job.id) + '"' + (canOpenDetails ? ' data-job-openable="1" tabindex="0" role="button" aria-expanded="' + (isExpanded ? "true" : "false") + '" title="Click to inspect details"' : "");
           const row = '<div class="list-row job-row job-row--' + tone + (canOpenDetails ? ' job-row--openable' : '') + (isExpanded ? ' job-row--expanded' : '') + '" ' + rowAttrs + '>' +
             '<div>' +
               '<div><strong>' + escapeHtml(job.id.slice(0, 8)) + '</strong></div>' +
@@ -972,7 +978,7 @@ function renderHtml(): string {
         const error = state.expandedJobError.get(job.id);
         const loading = state.expandedJobLoading === job.id;
         if (loading) {
-          return '<div class="list-row job-detail-row"><div class="job-detail-panel"><div class="job-detail-card"><div class="meta">Loading warning details...</div></div></div></div>';
+          return '<div class="list-row job-detail-row"><div class="job-detail-panel"><div class="job-detail-card"><div class="meta">Loading job details...</div></div></div></div>';
         }
         if (error) {
           return '<div class="list-row job-detail-row"><div class="job-detail-panel"><div class="job-detail-card"><div class="meta error">' + escapeHtml(error) + '</div></div></div></div>';
@@ -980,22 +986,36 @@ function renderHtml(): string {
         const events = detail && Array.isArray(detail.events) ? detail.events : [];
         const warningEvents = events.filter((event) => event.level === "error");
         const eventSource = warningEvents.length ? warningEvents : events;
+        const title = job.status === "failed" ? "Failure details" : "Warning details";
+        const emptyMessage = job.status === "failed" ? "No failure events were captured for this job." : "No warning events were captured for this job.";
         const summary = [
           '<span class="pill"><strong>' + escapeHtml(String(job.copied || 0)) + '</strong> copied</span>',
           '<span class="pill"><strong>' + escapeHtml(String(job.skipped || 0)) + '</strong> skipped</span>',
           '<span class="pill"><strong>' + escapeHtml(String(job.failed || 0)) + '</strong> failed</span>',
         ].join("");
         const eventMarkup = eventSource.length
-          ? eventSource.map((event) => '<div class="job-detail-event job-detail-event--' + escapeHtml(event.level === "error" ? "error" : "info") + '">' +
-              '<strong>' + escapeHtml(event.level === "error" ? "Warning" : event.level) + '</strong>' +
-              '<span>' + escapeHtml(event.message) + '</span>' +
-            '</div>').join("")
-          : '<div class="job-detail-event"><strong>Warning details</strong><span>No warning events were captured for this job.</span></div>';
+          ? eventSource.map((event) => {
+              const isError = event.level === "error";
+              const subjectKey = event.subjectKey || "";
+              const retryButton = isError && subjectKey
+                ? '<button type="button" class="ghost mini" data-job-retry="' + escapeHtml(job.id) + '" data-job-retry-key="' + escapeHtml(subjectKey) + '">Retry</button>'
+                : "";
+              return '<div class="job-detail-event job-detail-event--' + escapeHtml(isError ? "error" : "info") + '">' +
+                '<div class="job-detail-event-row">' +
+                  '<div class="job-detail-event-body">' +
+                    '<strong>' + escapeHtml(isError ? (job.status === "failed" ? "Error" : "Warning") : event.level) + '</strong>' +
+                    '<span>' + escapeHtml(event.message) + '</span>' +
+                  '</div>' +
+                  (retryButton ? '<div class="job-detail-event-actions">' + retryButton + '</div>' : '') +
+                '</div>' +
+              '</div>';
+            }).join("")
+          : '<div class="job-detail-event"><strong>' + escapeHtml(title) + '</strong><span>' + escapeHtml(emptyMessage) + '</span></div>';
         const updatedAt = detail && detail.updatedAt ? detail.updatedAt : job.updatedAt;
         return '<div class="list-row job-detail-row"><div class="job-detail-panel"><div class="job-detail-card">' +
           '<div class="job-detail-header">' +
             '<div class="job-detail-title">' +
-              '<strong>Warning details</strong>' +
+              '<strong>' + escapeHtml(title) + '</strong>' +
               '<div class="meta">Updated ' + escapeHtml(updatedAt) + '</div>' +
             '</div>' +
             '<div class="job-detail-summary">' + summary + '</div>' +
@@ -1035,6 +1055,14 @@ function renderHtml(): string {
             state.expandedJobDetails.delete(payload.job.id);
           }
           renderJobs();
+          await refreshJobs();
+        }
+      }
+
+      async function retryJobItem(jobId, subjectKey) {
+        const payload = await postJson("/api/jobs/retry", { jobId, subjectKey });
+        if (payload && payload.job) {
+          log("Retry queued for " + subjectKey + " as job " + payload.job.id + ".");
           await refreshJobs();
         }
       }
@@ -1432,6 +1460,17 @@ function renderHtml(): string {
       els.jobsList.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;
+        const retryButton = target.closest("[data-job-retry]");
+        if (retryButton instanceof HTMLElement) {
+          const jobId = retryButton.getAttribute("data-job-retry");
+          const subjectKey = retryButton.getAttribute("data-job-retry-key");
+          if (!jobId || !subjectKey) return;
+          retryButton.setAttribute("disabled", "disabled");
+          void retryJobItem(jobId, subjectKey).catch((error) => {
+            log(errorMessage(error), "error");
+          });
+          return;
+        }
         const button = target.closest("[data-job-cancel]");
         if (!(button instanceof HTMLElement)) return;
         const jobId = button.getAttribute("data-job-cancel");
@@ -1444,7 +1483,7 @@ function renderHtml(): string {
       els.jobsList.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;
-        if (target.closest("[data-job-cancel]")) return;
+        if (target.closest("[data-job-cancel]") || target.closest("[data-job-retry]")) return;
         const row = target.closest("[data-job-id][data-job-openable='1']");
         if (!(row instanceof HTMLElement)) return;
         const jobId = row.getAttribute("data-job-id");
@@ -1455,6 +1494,7 @@ function renderHtml(): string {
         if (event.key !== "Enter" && event.key !== " ") return;
         const target = event.target;
         if (!(target instanceof Element)) return;
+        if (target.closest("[data-job-retry]")) return;
         const row = target.closest("[data-job-id][data-job-openable='1']");
         if (!(row instanceof HTMLElement)) return;
         event.preventDefault();
@@ -1708,6 +1748,25 @@ async function handleJobCancel(request: Request, env: AppEnv): Promise<Response>
   }
   const manager = getTransferManagerStub(env);
   const job = await manager.cancelJob(jobId);
+  if (!job) {
+    return json({ error: "Job not found" }, { status: 404 });
+  }
+  return json({ job });
+}
+
+async function handleJobRetry(request: Request, env: AppEnv): Promise<Response> {
+  const body = await parseJson(request);
+  const obj = body as Record<string, unknown>;
+  const jobId = typeof obj.jobId === "string" ? obj.jobId.trim() : "";
+  const subjectKey = typeof obj.subjectKey === "string" ? obj.subjectKey.trim() : "";
+  if (!jobId) {
+    throw new Error("Missing jobId.");
+  }
+  if (!subjectKey) {
+    throw new Error("Missing subjectKey.");
+  }
+  const manager = getTransferManagerStub(env);
+  const job = await manager.retryJobItem(jobId, subjectKey);
   if (!job) {
     return json({ error: "Job not found" }, { status: 404 });
   }
@@ -2684,9 +2743,17 @@ export class TransferManager extends DurableObject<Env> {
           job_id TEXT NOT NULL,
           created_at INTEGER NOT NULL,
           level TEXT NOT NULL,
-          message TEXT NOT NULL
+          message TEXT NOT NULL,
+          subject_key TEXT
         )
       `);
+      const eventColumns = this.ctx.storage.sql.exec<{ name: string }>(`PRAGMA table_info(job_events)`).toArray();
+      const addEventColumn = (name: string, definition: string) => {
+        if (!eventColumns.some((column) => column.name === name)) {
+          this.ctx.storage.sql.exec(`ALTER TABLE job_events ADD COLUMN ${definition}`);
+        }
+      };
+      addEventColumn("subject_key", "subject_key TEXT");
       this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)`);
       this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_job_events_job_created ON job_events(job_id, created_at DESC)`);
     });
@@ -2786,6 +2853,54 @@ export class TransferManager extends DurableObject<Env> {
     this.logEvent(jobId, "info", "Job cancelled");
     const refreshed = this.getJobRow(jobId);
     return refreshed ? this.rowToDetail(refreshed) : null;
+  }
+
+  async retryJobItem(jobId: string, subjectKey: string): Promise<TransferJobDetail | null> {
+    const job = this.getJobRow(jobId);
+    if (!job) {
+      return null;
+    }
+    const event = this.ctx.storage.sql.exec<{ subject_key: string | null }>(
+      `SELECT subject_key FROM job_events WHERE job_id = ? AND subject_key = ? LIMIT 1`,
+      jobId,
+      subjectKey,
+    ).toArray()[0];
+    const retryKey = event?.subject_key || subjectKey;
+    if (!retryKey) {
+      return null;
+    }
+    const retryKind = retryKey.endsWith("/") ? "folder" : "file";
+    const retrySelection = {
+      kind: retryKind,
+      key: retryKind === "folder" ? ensureTrailingSlashPath(retryKey) : retryKey.replace(/\/+$/, ""),
+    } satisfies TransferJobSelection;
+    const retryJob = await this.createJob({
+      aws: {
+        accessKeyId: job.aws_access_key_id,
+        secretAccessKey: job.aws_secret_access_key,
+        sessionToken: job.aws_session_token || undefined,
+        region: job.source_region,
+      },
+      source: {
+        provider: job.source_provider,
+        name: job.source_bucket,
+        region: job.source_region,
+        password: job.source_resource_password || undefined,
+      },
+      sourcePrefix: job.source_prefix,
+      selections: [retrySelection],
+      destination: {
+        provider: job.destination_provider,
+        name: job.destination_zone,
+        region: job.destination_zone_region,
+        password: job.destination_zone_password || undefined,
+      },
+      destinationPrefix: job.destination_prefix,
+      conflictMode: job.conflict_mode,
+      totalFiles: retryKind === "folder" ? 0 : 1,
+    });
+    this.logEvent(job.id, "info", `Queued retry for ${retryKey}`);
+    return retryJob;
   }
 
   async getJob(jobId: string): Promise<TransferJobDetail | null> {
@@ -3092,7 +3207,7 @@ export class TransferManager extends DurableObject<Env> {
   }
 
   private handleStepFailure(job: TransferJobRow, key: string, error: unknown): void {
-    this.logEvent(job.id, "error", `${key}: ${(error as Error).message}`);
+    this.logEvent(job.id, "error", `${key}: ${(error as Error).message}`, { subjectKey: key });
   }
 
   private updateJob(jobId: string, patch: Partial<TransferJobRow>): void {
@@ -3149,8 +3264,8 @@ export class TransferManager extends DurableObject<Env> {
 
   private getJobEvents(jobId: string): TransferJobEvent[] {
     return this.ctx.storage.sql
-      .exec<{ created_at: number; level: string; message: string }>(
-        `SELECT created_at, level, message FROM job_events WHERE job_id = ? ORDER BY created_at ASC, id ASC`,
+      .exec<{ created_at: number; level: string; message: string; subject_key: string | null }>(
+        `SELECT created_at, level, message, subject_key FROM job_events WHERE job_id = ? ORDER BY created_at ASC, id ASC`,
         jobId,
       )
       .toArray()
@@ -3158,16 +3273,18 @@ export class TransferManager extends DurableObject<Env> {
         createdAt: new Date(row.created_at).toISOString(),
         level: row.level,
         message: row.message,
+        subjectKey: row.subject_key || undefined,
       }));
   }
 
-  private logEvent(jobId: string, level: string, message: string): void {
+  private logEvent(jobId: string, level: string, message: string, meta?: { subjectKey?: string }): void {
     this.ctx.storage.sql.exec(
-      `INSERT INTO job_events (job_id, created_at, level, message) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO job_events (job_id, created_at, level, message, subject_key) VALUES (?, ?, ?, ?, ?)`,
       jobId,
       Date.now(),
       level,
       message,
+      meta?.subjectKey || null,
     );
   }
 
