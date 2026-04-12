@@ -12,8 +12,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8787
 ENV HOST=0.0.0.0
+LABEL org.opencontainers.image.source="https://github.com/Go-Vennture/s3-bunny-migration"
+LABEL org.opencontainers.image.title="s3-bunny-migration"
+LABEL org.opencontainers.image.description="Single-process Node app for moving files between Amazon S3 buckets and Bunny Storage zones."
 
-COPY package*.json ./
+COPY package*.json ./ 
 RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist

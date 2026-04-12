@@ -66,7 +66,7 @@ ghcr.io/<your-github-owner>/s3-bunny-migration:main
 
 You can also use the immutable SHA tag from the same workflow.
 
-If you keep the GHCR image private, add your GitHub registry credentials in Bunny Magic Containers under Image Registries. Bunny’s docs support both public and private GitHub registries.
+GitHub Container Registry packages are private by default the first time they are published. If you want Bunny to discover the image without extra registry credentials, change the package visibility to public in GitHub. If you keep it private, add your GitHub registry credentials in Bunny Magic Containers under Image Registries. Bunny’s docs support both public and private GitHub registries.
 
 ## CLI
 
