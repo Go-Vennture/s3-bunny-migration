@@ -2611,14 +2611,26 @@ async function putBunnyObject(
     AccessKey: resource.password || "",
     "Content-Type": contentType,
   });
-  if (contentLength) {
-    headers.set("Content-Length", contentLength);
+  const requestUrl = `https://${endpoint}${bunnyObjectPath(resource.name, key)}`;
+  let requestBody = body;
+  let pipePromise: Promise<void> | null = null;
+  if (body instanceof ReadableStream && contentLength) {
+    const length = Number(contentLength);
+    if (Number.isFinite(length) && length >= 0) {
+      const fixedLength = new FixedLengthStream(length);
+      pipePromise = body.pipeTo(fixedLength.writable);
+      requestBody = fixedLength.readable;
+    }
   }
-  const upload = await fetch(`https://${endpoint}${bunnyObjectPath(resource.name, key)}`, {
+  const uploadPromise = fetch(requestUrl, {
     method: "PUT",
     headers,
-    body,
+    body: requestBody,
   });
+  const upload = await uploadPromise;
+  if (pipePromise) {
+    await pipePromise;
+  }
   if (!upload.ok && upload.status !== 201) {
     const message = await upload.text();
     throw new Error(message || `Bunny upload failed with status ${upload.status}.`);
