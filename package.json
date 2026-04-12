@@ -7,7 +7,8 @@
     "deploy": "wrangler deploy",
     "check": "wrangler check",
     "types": "wrangler types",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cli": "node ./cli.mjs"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

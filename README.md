@@ -44,6 +44,47 @@ npm run deploy
 
 If your repository is wired to deploy from `main`, pushing to `main` will also publish the latest version to Cloudflare.
 
+## CLI
+
+You can also drive the same Worker API from the terminal:
+
+```bash
+npm run cli -- preview --config transfer.json
+npm run cli -- move --config transfer.json
+```
+
+Example `transfer.json`:
+
+```json
+{
+  "workerUrl": "http://127.0.0.1:8787",
+  "aws": {
+    "accessKeyId": "AKIA...",
+    "secretAccessKey": "secret",
+    "region": "us-east-1"
+  },
+  "bunnyApiKey": "your-bunny-api-key",
+  "source": {
+    "provider": "aws",
+    "name": "source-bucket",
+    "region": "us-east-1"
+  },
+  "sourcePrefix": "",
+  "selections": [
+    { "kind": "folder", "key": "downloads/" }
+  ],
+  "destination": {
+    "provider": "bunny",
+    "name": "destination-zone",
+    "region": "ny"
+  },
+  "destinationPrefix": "",
+  "conflictMode": "replace"
+}
+```
+
+The CLI also includes helpers for `jobs`, `job`, `cancel`, `retry`, `aws-buckets`, `bunny-zones`, `aws-list`, and `bunny-list`.
+
 ## How It Works
 
 The app has two layers:
