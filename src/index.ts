@@ -89,7 +89,6 @@ type TransferConflictPreview = {
 };
 
 const SAFE_COPY_CONCURRENCY = 4;
-const LARGE_FILE_BUNNY_THRESHOLD_BYTES = 100 * 1024 * 1024;
 
 type ResolvedBunnyZone = BunnyZone & {
   password: string;
@@ -2643,15 +2642,9 @@ async function putBunnyObject(
   if (body instanceof ReadableStream && contentLength) {
     const length = Number(contentLength);
     if (Number.isFinite(length) && length >= 0) {
-      if (length >= LARGE_FILE_BUNNY_THRESHOLD_BYTES) {
-        // Large Bunny uploads are sent with an explicit content length so we
-        // can avoid wrapping the stream in another buffering layer.
-        headers.set("Content-Length", String(length));
-      } else {
-        const fixedLength = new FixedLengthStream(length);
-        pipePromise = body.pipeTo(fixedLength.writable);
-        requestBody = fixedLength.readable;
-      }
+      const fixedLength = new FixedLengthStream(length);
+      pipePromise = body.pipeTo(fixedLength.writable);
+      requestBody = fixedLength.readable;
     }
   }
   const uploadRequest = new Request(requestUrl, {
