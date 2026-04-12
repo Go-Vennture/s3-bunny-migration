@@ -8,7 +8,8 @@
     "check": "wrangler check",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
-    "cli": "node ./cli.mjs"
+    "cli": "node ./cli.mjs",
+    "postinstall": "node ./scripts/patch-ssh2.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
