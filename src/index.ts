@@ -1938,16 +1938,16 @@ async function signedS3RequestToHost(
   query: URLSearchParams,
   body?: BodyInit | null,
   payloadHashOverride?: string,
+  extraHeaders?: HeadersInit,
 ): Promise<Response> {
   const url = `https://${host}${encodeUrlPath(path)}${query.toString() ? `?${query.toString()}` : ""}`;
   const amzDate = toAmzDate(new Date());
   const dateStamp = amzDate.slice(0, 8);
   const payloadHash = payloadHashOverride || await sha256Hex(body ?? "");
-  const headers = new Headers({
-    host,
-    "x-amz-date": amzDate,
-    "x-amz-content-sha256": payloadHash,
-  });
+  const headers = new Headers(extraHeaders);
+  headers.set("host", host);
+  headers.set("x-amz-date", amzDate);
+  headers.set("x-amz-content-sha256", payloadHash);
   if (creds.sessionToken) headers.set("x-amz-security-token", creds.sessionToken);
   headers.set(
     "authorization",
@@ -2030,6 +2030,9 @@ async function toBytes(data: BodyInit | ArrayBuffer | string): Promise<ArrayBuff
   if (data instanceof ArrayBuffer) return data;
   if (ArrayBuffer.isView(data)) return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   if (data instanceof Blob) return data.arrayBuffer();
+  if (data instanceof ReadableStream) {
+    throw new Error("Cannot hash a streaming body directly.");
+  }
   return new TextEncoder().encode(String(data)).buffer;
 }
 
@@ -2538,6 +2541,7 @@ async function putAwsObject(
     query,
     body,
     "UNSIGNED-PAYLOAD",
+    { "Content-Type": contentType },
   );
   if (!response.ok && response.status !== 200) {
     throw new Error(await response.text());
