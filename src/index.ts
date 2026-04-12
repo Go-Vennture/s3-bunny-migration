@@ -1039,6 +1039,12 @@ function renderHtml(): string {
         return error instanceof Error ? error.message : String(error ?? "Unknown error");
       }
 
+      function isFetchFailure(error) {
+        const message = errorMessage(error);
+        return error instanceof DOMException && error.name === "AbortError" ||
+          /Failed to fetch|NetworkError|fetch failed/i.test(message);
+      }
+
       function readUiState() {
         try {
           const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -1529,22 +1535,33 @@ function renderHtml(): string {
         void refreshJobs();
       }
 
-      async function postJsonResponse(path, body) {
-        const response = await fetch(path, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const raw = await response.text();
-        let payload = {};
-        if (raw) {
-          try {
-            payload = JSON.parse(raw);
-          } catch {
-            payload = { raw };
+      async function postJsonResponse(path, body, options = {}) {
+        const controller = options.timeoutMs ? new AbortController() : null;
+        const timeoutId = controller
+          ? setTimeout(() => controller.abort(), options.timeoutMs)
+          : null;
+        try {
+          const response = await fetch(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+            signal: controller ? controller.signal : undefined,
+          });
+          const raw = await response.text();
+          let payload = {};
+          if (raw) {
+            try {
+              payload = JSON.parse(raw);
+            } catch {
+              payload = { raw };
+            }
+          }
+          return { response, payload, raw };
+        } finally {
+          if (timeoutId !== null) {
+            clearTimeout(timeoutId);
           }
         }
-        return { response, payload, raw };
       }
 
       async function postJson(path, body) {
@@ -1779,25 +1796,37 @@ function renderHtml(): string {
             },
             destinationPrefix: ensureTrailingSlash(els.destinationPrefix.value),
           };
-          const preview = await postJsonResponse("/api/transfer", {
-            ...payload,
-            previewOnly: true,
-          });
-          if (!preview.response.ok && preview.response.status !== 409) {
-            const previewError = preview.payload && typeof preview.payload === "object" && preview.payload.error ? preview.payload.error : preview.raw;
-            throw new Error(previewError
-              ? "Preview failed (" + String(preview.response.status) + " " + (preview.response.statusText || "unknown") + "): " + String(previewError)
-              : "Preview failed (" + String(preview.response.status) + " " + (preview.response.statusText || "unknown") + ")");
-          }
-          const conflicts = Array.isArray(preview.payload.conflicts) ? preview.payload.conflicts.map((item) => String(item)) : [];
-          const conflictCount = Number(preview.payload.conflictCount || conflicts.length || 0);
-          const totalFiles = Number(preview.payload.plannedFiles || 0);
-          const conflictMode = conflictCount > 0 ? await askTransferConflict(conflicts, conflictCount) : "replace";
-          if (!conflictMode) {
-            setStatus(els.sourceStatus, "Transfer cancelled.");
-            setStatus(els.destinationStatus, "Transfer cancelled.");
-            log("Transfer cancelled.");
-            return;
+          let conflictMode = "replace";
+          let totalFiles = selections.length;
+          try {
+            const preview = await postJsonResponse("/api/transfer", {
+              ...payload,
+              previewOnly: true,
+            }, { timeoutMs: 15000 });
+            if (!preview.response.ok && preview.response.status !== 409) {
+              const previewError = preview.payload && typeof preview.payload === "object" && preview.payload.error ? preview.payload.error : preview.raw;
+              throw new Error(previewError
+                ? "Preview failed (" + String(preview.response.status) + " " + (preview.response.statusText || "unknown") + "): " + String(previewError)
+                : "Preview failed (" + String(preview.response.status) + " " + (preview.response.statusText || "unknown") + ")");
+            }
+            const conflicts = Array.isArray(preview.payload.conflicts) ? preview.payload.conflicts.map((item) => String(item)) : [];
+            const conflictCount = Number(preview.payload.conflictCount || conflicts.length || 0);
+            totalFiles = Number(preview.payload.plannedFiles || selections.length || 0);
+            conflictMode = conflictCount > 0 ? await askTransferConflict(conflicts, conflictCount) : "replace";
+            if (!conflictMode) {
+              setStatus(els.sourceStatus, "Transfer cancelled.");
+              setStatus(els.destinationStatus, "Transfer cancelled.");
+              log("Transfer cancelled.");
+              return;
+            }
+          } catch (error) {
+            if (!isFetchFailure(error)) {
+              throw error;
+            }
+            setStatus(els.transferStatus, "Preview timed out. Queueing transfer without a conflict check.");
+            setStatus(els.sourceStatus, "Preview timed out. Queueing transfer...");
+            setStatus(els.destinationStatus, "Preview timed out. Queueing transfer...");
+            log("Transfer preview timed out, so the job will queue without a conflict prompt.");
           }
           const queueMessage = "Queueing transfer of " + String(selections.length) + " selected item(s)...";
           setStatus(els.transferStatus, queueMessage);
