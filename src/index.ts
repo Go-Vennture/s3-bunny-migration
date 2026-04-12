@@ -1,4 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
+import { Client as SshClient, type ConnectConfig, type SFTPWrapper } from "ssh2";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { FAVICON_BASE64 } from "./favicon-data";
 
 type AwsCredentials = {
@@ -89,6 +92,7 @@ type TransferConflictPreview = {
 };
 
 const SAFE_COPY_CONCURRENCY = 4;
+const LARGE_FILE_BUNNY_THRESHOLD_BYTES = 100 * 1024 * 1024;
 
 type ResolvedBunnyZone = BunnyZone & {
   password: string;
@@ -2553,6 +2557,11 @@ async function writeStorageObject(
     await putAwsObject(aws, resource.name, resource.region, key, body, contentType);
     return;
   }
+  const parsedLength = Number(contentLength);
+  if (body instanceof ReadableStream && Number.isFinite(parsedLength) && parsedLength >= LARGE_FILE_BUNNY_THRESHOLD_BYTES) {
+    await putBunnySftpObject(resource, key, body);
+    return;
+  }
   await putBunnyObject(resource, key, body, contentType, contentLength);
 }
 
@@ -2663,6 +2672,57 @@ async function putBunnyObject(
   }
 }
 
+async function putBunnySftpObject(
+  resource: ResolvedStorageResource,
+  key: string,
+  body: ReadableStream,
+): Promise<void> {
+  const password = resource.password || "";
+  if (!password) {
+    throw new Error("Missing Bunny storage password for SFTP upload.");
+  }
+
+  const endpoint = bunnyEndpointForRegion(resource.region);
+  const client = new SshClient();
+  try {
+    await connectSshClient(client, {
+      host: endpoint,
+      port: 22,
+      username: resource.name,
+      password,
+      readyTimeout: 30_000,
+    });
+    const sftp = await openSftpSession(client);
+    const sourceStream = Readable.fromWeb(body as unknown as import("node:stream/web").ReadableStream<Uint8Array>);
+    const destinationStream = sftp.createWriteStream(bunnySftpPath(key));
+    await pipeline(sourceStream, destinationStream);
+  } catch (error) {
+    throw new Error(`Bunny SFTP upload failed: ${(error as Error).message}`);
+  } finally {
+    client.end();
+  }
+}
+
+function connectSshClient(client: SshClient, config: ConnectConfig): Promise<void> {
+  return new Promise((resolve, reject) => {
+    client.once("ready", () => resolve());
+    client.once("error", reject);
+    client.connect(config);
+  });
+}
+
+function openSftpSession(client: SshClient): Promise<SFTPWrapper> {
+  return new Promise((resolve, reject) => {
+    client.sftp((error, sftp) => {
+      if (error || !sftp) {
+        reject(error || new Error("Failed to open SFTP session."));
+        return;
+      }
+      resolve(sftp);
+    });
+  });
+}
+
 async function listAllBunnyFiles(resource: ResolvedStorageResource, prefix: string): Promise<S3Item[]> {
   const items: S3Item[] = [];
   const seen = new Set<string>();
@@ -2700,6 +2760,15 @@ function bunnyObjectPath(zoneName: string, key: string): string {
     .map((segment) => encodeURIComponent(segment))
     .join("/");
   return cleanKey ? `/${encodedZone}/${cleanKey}` : `/${encodedZone}`;
+}
+
+function bunnySftpPath(key: string): string {
+  const cleanKey = key
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
+  return cleanKey ? `/${cleanKey}` : "/";
 }
 
 async function resolveStorageResource(apiKey: string, resource: StorageResourceRef): Promise<ResolvedStorageResource> {

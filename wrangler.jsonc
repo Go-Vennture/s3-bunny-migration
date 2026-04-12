@@ -3,6 +3,7 @@
   "name": "s3-bunny-migration",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-10",
+  "compatibility_flags": ["nodejs_compat"],
   "routes": [
     {
       "pattern": "s3-bunny.evtapp.com",
